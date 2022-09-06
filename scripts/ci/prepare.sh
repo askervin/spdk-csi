@@ -16,6 +16,11 @@ function check_os() {
     source /etc/os-release
     distro=${NAME,,}
 
+    if [[ "${distro}" == *"debian"* ]]; then
+        echo "Debian detected"
+        distro=ubuntu
+    fi
+
     if [ "${distro}" != "ubuntu" ] && [ "${distro}" != "fedora" ]; then
         echo "Only supports Ubuntu and Fedora now"
         exit 1
