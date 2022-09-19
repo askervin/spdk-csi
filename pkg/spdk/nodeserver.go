@@ -31,13 +31,16 @@ import (
 
 	csicommon "github.com/spdk/spdk-csi/pkg/csi-common"
 	"github.com/spdk/spdk-csi/pkg/util"
+
+	"spdk.io/sma"
 )
 
 type nodeServer struct {
 	*csicommon.DefaultNodeServer
-	mounter mount.Interface
-	volumes map[string]*nodeVolume
-	mtx     sync.Mutex // protect volumes map
+	mounter   mount.Interface
+	volumes   map[string]*nodeVolume
+	mtx       sync.Mutex // protect volumes map
+	smaClient sma.StorageManagementAgentClient
 }
 
 type nodeVolume struct {
@@ -51,6 +54,7 @@ func newNodeServer(d *csicommon.CSIDriver) *nodeServer {
 		DefaultNodeServer: csicommon.NewDefaultNodeServer(d),
 		mounter:           mount.New(""),
 		volumes:           make(map[string]*nodeVolume),
+		smaClient:         nil,
 	}
 }
 
@@ -211,6 +215,8 @@ func (ns *nodeServer) stageVolume(devicePath string, req *csi.NodeStageVolumeReq
 	if mounted {
 		return stagingPath, nil
 	}
+
+	// TODO-SMA: apply req.VolumeContext.defaultclass.QoS req.VolumeContext.QoS
 
 	fsType := req.GetVolumeCapability().GetMount().GetFsType()
 	mntFlags := req.GetVolumeCapability().GetMount().GetMountFlags()

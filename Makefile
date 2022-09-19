@@ -40,9 +40,24 @@ all: spdkcsi lint test
 
 # build binary
 .PHONY: spdkcsi
-spdkcsi:
+spdkcsi: pkg/proto
 	@echo === building spdkcsi binary
 	@CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=linux go build -o $(OUT_DIR)/spdkcsi ./cmd/
+
+pkg/proto:
+	export smadir="$@"; \
+	mkdir -p "$${smadir}" && \
+	[ -f "$${smadir}/sma.proto" ] || for proto in sma nvme nvmf nvmf_tcp virtio_blk; do \
+		wget -O-  https://raw.githubusercontent.com/spdk/spdk/master/python/spdk/sma/proto/$${proto}.proto \
+			> "$${smadir}/$${proto}.proto"; \
+	done; \
+	( cd "$${smadir}" && protoc --go_out=. --go-grpc_out=. *.proto ); \
+	echo "module github.com/spdk/spdk-csi/spdk.io" > "$${smadir}/spdk.io/sma/go.mod"; \
+	echo "go 1.19" >> "$${smadir}/spdk.io/sma/go.mod"; \
+	echo 'replace "spdk.io/sma" => "../sma"' >> "$${smadir}/spdk.io/sma/go.mod"; \
+	go work init $${smadir}/spdk.io/sma; \
+	go work use .; \
+	echo ok.
 
 # static code check, text lint
 lint: golangci yamllint shellcheck

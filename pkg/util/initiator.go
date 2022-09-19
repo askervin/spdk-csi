@@ -28,7 +28,7 @@ import (
 	"k8s.io/klog"
 )
 
-// SpdkCsiInitiator defines interface for NVMeoF/iSCSI initiator
+// SpdkCsiInitiator defines interface for NVMeoF/iSCSI/SMA initiator
 //   - Connect initiates target connection and returns local block device filename
 //     e.g., /dev/disk/by-id/nvme-SPDK_Controller1_SPDK00000000000001
 //   - Disconnect terminates target connection
@@ -41,6 +41,7 @@ type SpdkCsiInitiator interface {
 
 func NewSpdkCsiInitiator(volumeContext map[string]string) (SpdkCsiInitiator, error) {
 	targetType := strings.ToLower(volumeContext["targetType"])
+	klog.Infof("DELME initiator volumeContext: %+v", volumeContext)
 	switch targetType {
 	case "rdma", "tcp":
 		return &initiatorNVMf{
@@ -56,6 +57,11 @@ func NewSpdkCsiInitiator(volumeContext map[string]string) (SpdkCsiInitiator, err
 			targetAddr: volumeContext["targetAddr"],
 			targetPort: volumeContext["targetPort"],
 			iqn:        volumeContext["iqn"],
+		}, nil
+	case "sma":
+		return &initiatorSMA{
+			targetAddr: volumeContext["targetAddr"],
+			targetPort: volumeContext["targetPort"],
 		}, nil
 	default:
 		return nil, fmt.Errorf("unknown initiator: %s", targetType)
@@ -194,4 +200,22 @@ func execWithTimeout(cmdLine []string, timeout int) error {
 		klog.Infof("command returned: %s", output)
 	}
 	return err
+}
+
+// SMA initiator implementation
+type initiatorSMA struct {
+	targetAddr string
+	targetPort string
+}
+
+func (sma *initiatorSMA) Connect() (string, error) {
+	klog.Errorf("initiatorSMA.Connect(): not implemented")
+	// TODO: send CreateDevice to SMA
+	// TODO: wait for /dev/... to appear.
+	return "", fmt.Errorf("initiatorSMA.Connect(): not implemented error")
+}
+
+func (sma *initiatorSMA) Disconnect() error {
+	klog.Errorf("initiatorSMA.Disconnect(): not implemented")
+	return fmt.Errorf("initiatorSMA.Disconnect(): not implemented error")
 }

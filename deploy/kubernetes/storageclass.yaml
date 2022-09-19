@@ -9,5 +9,9 @@ metadata:
 provisioner: csi.spdk.io
 parameters:
   fsType: ext4
+  sma: |
+    qos:
+      maximum:
+        rw_iops: 42
 reclaimPolicy: Delete
 volumeBindingMode: Immediate

@@ -10,6 +10,9 @@ data:
   # rpcURL: spdk json rpc target
   # targetType: nvme-rdma, nvme-tcp, iscsi
   # targetAddr: target service IP
+  # sma.server: URL to connect the SMA server on every cluster node,
+  #             http://IPADDR:PORT
+  #             unix:///path/and/sma.sock
   config.json: |-
     {
       "nodes": [
@@ -19,5 +22,8 @@ data:
           "targetType": "nvme-tcp",
           "targetAddr": "127.0.0.1"
         }
-      ]
+      ],
+      "sma": {
+        "server": "http://localhost:5114"
+      }
     }

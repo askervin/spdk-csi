@@ -8,13 +8,16 @@ require (
 	github.com/kubernetes-csi/csi-lib-utils v0.7.0
 	github.com/onsi/gomega v1.19.0
 	google.golang.org/grpc v1.47.0
-	google.golang.org/protobuf v1.28.0
+	google.golang.org/protobuf v1.28.1
 	k8s.io/apimachinery v0.25.0
 	k8s.io/client-go v0.25.0
 	k8s.io/klog v1.0.0
 	k8s.io/kubernetes v1.25.0
 	k8s.io/utils v0.0.0-20220728103510-ee6ede2d64ed
+	spdk.io/sma v0.0.0-00010101000000-000000000000
 )
+
+require k8s.io/api v0.25.0 // indirect
 
 require (
 	github.com/PuerkitoBio/purell v1.1.1 // indirect
@@ -120,4 +123,5 @@ replace (
 	k8s.io/metrics => k8s.io/metrics v0.25.0
 	k8s.io/pod-security-admission => k8s.io/pod-security-admission v0.25.0
 	k8s.io/sample-apiserver => k8s.io/sample-apiserver v0.25.0
+	spdk.io/sma => ./pkg/proto/spdk.io/sma
 )

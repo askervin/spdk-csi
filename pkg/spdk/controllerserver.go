@@ -38,6 +38,7 @@ type controllerServer struct {
 	*csicommon.DefaultControllerServer
 
 	spdkNodes []util.SpdkNode // all spdk nodes in cluster
+	sma       *SmaConfig      // SMA configuration or nil to skip SMA
 
 	volumes       map[string]*volume      // volume id to volume struct
 	volumesIdem   map[string]string       // volume name to id, for CreateVolume idempotency
@@ -53,6 +54,7 @@ type volume struct {
 	mtx       sync.Mutex // per volume lock to serialize DeleteVolume requests
 }
 
+//nolint:cyclop // CreateVolume exceeds cyclomatic complexity of 10
 func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
 	// be idempotent to duplicated requests
 	volume, err := func() (*volume, error) {
@@ -109,6 +111,9 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		for k, v := range volumeInfo {
 			volume.csiVolume.VolumeContext[k] = v
 		}
+	}
+	if cs.sma != nil {
+		volume.csiVolume.VolumeContext["sma"] = cs.sma.JSONString()
 	}
 
 	volumeID := volume.csiVolume.GetVolumeId()
@@ -363,19 +368,13 @@ func newControllerServer(d *csicommon.CSIDriver) (*controllerServer, error) {
 
 	// get spdk node configs, see deploy/kubernetes/config-map.yaml
 	//nolint:tagliatelle // not using json:snake case
-	var config struct {
-		Nodes []struct {
-			Name       string `json:"name"`
-			URL        string `json:"rpcURL"`
-			TargetType string `json:"targetType"`
-			TargetAddr string `json:"targetAddr"`
-		} `json:"Nodes"`
-	}
+	var config GlobalConfig
 	configFile := util.FromEnv("SPDKCSI_CONFIG", "/etc/spdkcsi-config/config.json")
 	err := util.ParseJSONFile(configFile, &config)
 	if err != nil {
 		return nil, err
 	}
+	server.sma = config.Sma
 
 	// get spdk node secrets, see deploy/kubernetes/secret.yaml
 	//nolint:tagliatelle // not using json:snake case
@@ -395,6 +394,7 @@ func newControllerServer(d *csicommon.CSIDriver) (*controllerServer, error) {
 	// create spdk nodes
 	for i := range config.Nodes {
 		node := &config.Nodes[i]
+		klog.Infof("DELME: controllerserver node %d: %+v", i, node)
 		tokenFound := false
 		// find secret per node
 		for j := range secret.Tokens {

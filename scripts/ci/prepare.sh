@@ -50,6 +50,7 @@ function check_os() {
 function install_packages_ubuntu() {
     apt-get update -y
     apt-get install -y make gcc curl docker.io conntrack wget
+    apt-get install -y protobuf-compiler protoc-gen-go # TODO: are these good enough for 20.04
     systemctl start docker
     # install static check tools only on x86 agent
     if [ "$(arch)" == x86_64 ]; then
@@ -92,6 +93,8 @@ function install_golang() {
     GOPKG=go${GOVERSION}.linux-${ARCH}.tar.gz
     curl -s https://dl.google.com/go/${GOPKG} | tar -C /usr/local -xzf -
     /usr/local/go/bin/go version
+    # Install go grpc plugin for protoc.
+    go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.2
 }
 
 function setup_cri_dockerd() {

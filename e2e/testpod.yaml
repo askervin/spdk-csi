@@ -9,6 +9,7 @@ metadata:
   labels:
     app: spdkcsi-pvc
 spec:
+  terminationGracePeriodSeconds: 0
   containers:
   - name: alpine
     image: alpine:3

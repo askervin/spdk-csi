@@ -20,6 +20,7 @@ apiVersion: v1
 metadata:
   name: spdkcsi-test
 spec:
+  terminationGracePeriodSeconds: 0
   containers:
   - name: alpine
     image: alpine:3
