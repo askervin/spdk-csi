@@ -29,6 +29,7 @@ function prepare_spdk() {
     echo "======== start spdk target ========"
     # allocate 1024*2M hugepage
     sudo sh -c 'echo 1024 > /proc/sys/vm/nr_hugepages'
+    grep Huge /proc/meminfo
     # start spdk target
     sudo docker run -id --name "${SPDK_CONTAINER}" --privileged --net host -v /dev/hugepages:/dev/hugepages -v /dev/shm:/dev/shm ${SPDKIMAGE} /root/spdk/build/bin/spdk_tgt
     sleep 20s
@@ -48,12 +49,16 @@ function unit_test() {
     make -C "${ROOTDIR}" test
 }
 
-function e2e_test() {
-    echo "======== run E2E test ========"
+function prepare_k8s_cluster() {
+    echo "======== prepare k8s cluster with minikube ========"
     sudo modprobe iscsi_tcp
     sudo modprobe nvme-tcp
     export KUBE_VERSION MINIKUBE_VERSION
     sudo --preserve-env HOME="$HOME" "${ROOTDIR}/scripts/minikube.sh" up
+}
+
+function e2e_test() {
+    echo "======== run E2E test ========"
     export PATH="/var/lib/minikube/binaries/${KUBE_VERSION}:${PATH}"
     make -C "${ROOTDIR}" e2e-test
 }
@@ -78,7 +83,9 @@ export_proxy
 docker_login
 build
 trap cleanup EXIT
+prepare_k8s_cluster
 prepare_spdk
 unit_test
 e2e_test
-helm_test
+echo "SKIP: helm_test until running on Kubernetes v1.25"
+# helm_test
