@@ -87,5 +87,4 @@ prepare_k8s_cluster
 prepare_spdk
 unit_test
 e2e_test
-echo "SKIP: helm_test until running on Kubernetes v1.25"
-# helm_test
+helm_test
