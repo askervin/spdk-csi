@@ -33,6 +33,11 @@ endif
 ifeq ($(origin CSI_IMAGE_TAG), undefined)
   CSI_IMAGE_TAG := canary
 endif
+ifeq ($(DEBUG),1)
+  GCFLAGS=-gcflags "all=-N -l"
+else
+  GCFLAGS=
+endif
 CSI_IMAGE := $(CSI_IMAGE_REGISTRY)/spdkcsi:$(CSI_IMAGE_TAG)
 
 # default target
@@ -42,7 +47,7 @@ all: spdkcsi lint test
 .PHONY: spdkcsi
 spdkcsi: pkg/proto
 	@echo === building spdkcsi binary
-	@CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=linux go build -o $(OUT_DIR)/spdkcsi ./cmd/
+	CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=linux go build $(GCFLAGS) -o $(OUT_DIR)/spdkcsi ./cmd/
 
 pkg/proto:
 	export smadir="$@"; \

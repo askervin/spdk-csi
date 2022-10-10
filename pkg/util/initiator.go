@@ -18,6 +18,7 @@ package util
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -26,6 +27,13 @@ import (
 	"time"
 
 	"k8s.io/klog"
+
+	// grpc stuff
+	"google.golang.org/grpc"
+	smarpc "spdk.io/sma"
+	"spdk.io/sma/nvmf_tcp"
+
+	spdkcsiConfig "github.com/spdk/spdk-csi/pkg/config"
 )
 
 // SpdkCsiInitiator defines interface for NVMeoF/iSCSI/SMA initiator
@@ -41,7 +49,34 @@ type SpdkCsiInitiator interface {
 
 func NewSpdkCsiInitiator(volumeContext map[string]string) (SpdkCsiInitiator, error) {
 	targetType := strings.ToLower(volumeContext["targetType"])
-	klog.Infof("DELME initiator volumeContext: %+v", volumeContext)
+	if smaConfigString, ok := volumeContext["sma"]; ok {
+		isma := initiatorSMA{}
+		smaConfig := spdkcsiConfig.SmaConfig{}
+		err := json.Unmarshal([]byte(smaConfigString), &smaConfig)
+		if err != nil {
+			return nil, fmt.Errorf("invalid SMA configuration: %q (%w)", smaConfigString, err)
+		}
+		isma.serverURL = smaConfig.Server
+		switch targetType {
+		case "tcp":
+			isma.req = &smarpc.CreateDeviceRequest{
+				Volume: nil,
+				Params: &smarpc.CreateDeviceRequest_NvmfTcp{
+					&nvmf_tcp.DeviceParameters{
+						Subnqn:  volumeContext["nqn"],
+						Adrfam:  "ipv4", // TODO
+						Traddr:  volumeContext["targetAddr"],
+						Trsvcid: volumeContext["targetPort"],
+					},
+				},
+			}
+		default:
+			klog.Errorf("Unsupported SMA target type in %v", volumeContext)
+			return nil, fmt.Errorf("Unknown SMA target type: %q", volumeContext["targetType"])
+		}
+		return &isma, nil
+	}
+	klog.Infof("No SMA in volumeContext, use legacy connection to %v", volumeContext)
 	switch targetType {
 	case "rdma", "tcp":
 		return &initiatorNVMf{
@@ -57,11 +92,6 @@ func NewSpdkCsiInitiator(volumeContext map[string]string) (SpdkCsiInitiator, err
 			targetAddr: volumeContext["targetAddr"],
 			targetPort: volumeContext["targetPort"],
 			iqn:        volumeContext["iqn"],
-		}, nil
-	case "sma":
-		return &initiatorSMA{
-			targetAddr: volumeContext["targetAddr"],
-			targetPort: volumeContext["targetPort"],
 		}, nil
 	default:
 		return nil, fmt.Errorf("unknown initiator: %s", targetType)
@@ -204,11 +234,21 @@ func execWithTimeout(cmdLine []string, timeout int) error {
 
 // SMA initiator implementation
 type initiatorSMA struct {
-	targetAddr string
-	targetPort string
+	serverURL string
+	req       *smarpc.CreateDeviceRequest
 }
 
 func (sma *initiatorSMA) Connect() (string, error) {
+	var conn *grpc.ClientConn
+	conn, err := grpc.Dial(sma.serverURL, grpc.WithInsecure())
+	if err != nil {
+		return "", fmt.Errorf("failed to connect to SMA grpc server in %q: %w", sma.serverURL, err)
+	}
+	client := smarpc.NewStorageManagementAgentClient(conn)
+	ctxTimeout, _ := context.WithTimeout(context.Background(), 42*time.Second)
+	response, err := client.CreateDevice(ctxTimeout, sma.req)
+	klog.Infof("DELME: initiator Connect: CreateDevice response: %+v", response)
+
 	klog.Errorf("initiatorSMA.Connect(): not implemented")
 	// TODO: send CreateDevice to SMA
 	// TODO: wait for /dev/... to appear.

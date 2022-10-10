@@ -8,24 +8,27 @@
 #
 # Example workflow:
 #
+# e2e-k8s-start
 # e2e-spdk-build                    # build spdk image with SMA
 # e2e-spdk-start                    # start spdk target and SMA server
-# e2e-spdkcsi-build                 # build spdkcsi images
+# e2e-spdkcsi-build                 # build spdkcsi image
 # e2e-test                          # launch go test -test.v ./e2e
-# e2e-logs-controller               # see spdkcsi controller logs
-# e2e-logs-node                     # see spdkcsi node logs
-# e2e-debug-controller              # debug spdkcsi controller
-# e2e-debug-node                    # debug spdkcsi node
-# e2e-delete-deployments            # clear test pods and namespaces
+# e2e-controller-logs               # see spdkcsi controller logs
+# e2e-node-logs                     # see spdkcsi node logs
+# e2e-controller-debug              # debug spdkcsi controller
+# e2e-node-debug                    # debug spdkcsi node
+# e2e-spdkcsi-stop                  # clear test pods and namespaces
 # e2e-spdkcsi-build                 # rebuild spdkcsi, next "e2e-test"
 #
-# Example workflow 2: debug node plugin:
+# Example workflow 2: debug node plugin, trace sma server
 #
+# e2e-k8s-start
 # e2e-spdk-build
 # e2e-spdk-start
+# e2e-sma-trace
 # e2e-spdkcsi-build
-# e2e-spdkcsi-deploy
-# e2e-debug-node                    # set breakpoint in delve,
+# e2e-spdkcsi-start
+# e2e-node-debug                    # set breakpoint in delve,
 #                                   # NodeStageVolume()
 #                                   # NodePublishVolume()
 # kubectl create -f deploy/kubernetes/testpod.yaml
@@ -88,6 +91,30 @@ function e2e-sma-call() {
     echo "$jsonmsg" | docker exec -i "${SPDK_CONTAINER}" "${SMA_CLIENT}" --address "${SMA_ADDRESS}" --port "${SMA_PORT}"
 }
 
+function e2e-sma-trace() {
+    local sma_server_pid
+    sma_server_pid="$(pgrep -f '/root/spdk/scripts/sma.py --address')"
+    [ -z "$sma_server_pid" ] && {
+        echo "sma server not running. try: e2e-spdk-start"
+        return 1
+    }
+    command -v strace >&/dev/null || {
+        echo "strace not found."
+        return 1
+    }
+    ( set -x
+      strace -e trace=network -f -s 2048 -p "$sma_server_pid"
+    )
+}
+
+function e2e-k8s-start() {
+    ${SPDKCSI_DIR}/scripts/minikube.sh up
+}
+
+function e2e-k8s-stop() {
+    minikube delete
+}
+
 function e2e-spdk-running() {
     docker inspect "${SPDK_CONTAINER}" >&/dev/null
 }
@@ -109,7 +136,11 @@ function e2e-spdk-build() {
 }
 
 function e2e-spdk-start() {
-    e2e-spdk-running && e2e-spdk-stop
+    e2e-spdk-running && {
+        echo "spdk already running. Restart with:"
+        echo "e2e-spdk-stop; e2e-spdk-start"
+        return 0
+    }
     echo "======== start spdk target ========"
     # allocate 1024*2M hugepage
     sudo sh -c 'echo 1024 > /proc/sys/vm/nr_hugepages'
@@ -134,11 +165,11 @@ function e2e-spdk-start() {
     echo ok
 }
 
-function e2e-logs-node() {
+function e2e-node-logs() {
     kubectl logs $(kubectl get pods | awk '/spdkcsi-node-/{print $1}') spdkcsi-node
 }
 
-function e2e-logs-controller() {
+function e2e-controller-logs() {
     kubectl logs spdkcsi-controller-0 spdkcsi-controller
 }
 
@@ -152,7 +183,7 @@ function e2e-delete-deployments() {
     )
 }
 
-function e2e-debug-node() {
+function e2e-node-debug() {
     local pid_of_spkdcsi_node
     pid_of_spdkcsi_node="$(pgrep -f '/usr/local/bin/spdkcsi.*--node$')"
     [ -n "$pid_of_spdkcsi_node" ] || {
@@ -162,7 +193,7 @@ function e2e-debug-node() {
     e2e-debug-pid "$pid_of_spdkcsi_node"
 }
 
-function e2e-debug-controller() {
+function e2e-controller-debug() {
     local pid_of_spkdcsi_controller
     pid_of_spdkcsi_controller="$(pgrep -f '/usr/local/bin/spdkcsi.*--controller$')"
     [ -n "$pid_of_spdkcsi_controller" ] || {
@@ -185,10 +216,10 @@ function e2e-debug-pid() {
 
 function e2e-spdkcsi-build() {
     e2e-delete-deployments
-    ( cd "$SPDKCSI_DIR"; make image )
+    ( cd "$SPDKCSI_DIR"; make DEBUG=1 image )
 }
 
-function e2e-spdkcsi-deploy() {
+function e2e-spdkcsi-start() {
     (
         set -e -x
         cd "${SPDKCSI_DIR}/deploy/kubernetes"
@@ -196,7 +227,7 @@ function e2e-spdkcsi-deploy() {
     )
 }
 
-function e2e-spdkcsi-teardown() {
+function e2e-spdkcsi-stop() {
     (
         set -e -x
         cd "${SPDKCSI_DIR}/deploy/kubernetes"

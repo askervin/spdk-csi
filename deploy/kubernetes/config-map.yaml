@@ -24,6 +24,6 @@ data:
         }
       ],
       "sma": {
-        "server": "http://localhost:5114"
+        "server": "127.0.0.1:5114"
       }
     }

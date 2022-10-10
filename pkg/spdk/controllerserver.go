@@ -28,6 +28,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/klog"
 
+	spdkcsiConfig "github.com/spdk/spdk-csi/pkg/config"
 	csicommon "github.com/spdk/spdk-csi/pkg/csi-common"
 	"github.com/spdk/spdk-csi/pkg/util"
 )
@@ -37,8 +38,8 @@ var errVolumeInCreation = status.Error(codes.Internal, "volume in creation")
 type controllerServer struct {
 	*csicommon.DefaultControllerServer
 
-	spdkNodes []util.SpdkNode // all spdk nodes in cluster
-	sma       *SmaConfig      // SMA configuration or nil to skip SMA
+	spdkNodes []util.SpdkNode          // all spdk nodes in cluster
+	sma       *spdkcsiConfig.SmaConfig // SMA configuration or nil to skip SMA
 
 	volumes       map[string]*volume      // volume id to volume struct
 	volumesIdem   map[string]string       // volume name to id, for CreateVolume idempotency
@@ -368,7 +369,7 @@ func newControllerServer(d *csicommon.CSIDriver) (*controllerServer, error) {
 
 	// get spdk node configs, see deploy/kubernetes/config-map.yaml
 	//nolint:tagliatelle // not using json:snake case
-	var config GlobalConfig
+	var config spdkcsiConfig.GlobalConfig
 	configFile := util.FromEnv("SPDKCSI_CONFIG", "/etc/spdkcsi-config/config.json")
 	err := util.ParseJSONFile(configFile, &config)
 	if err != nil {
