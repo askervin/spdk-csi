@@ -156,7 +156,8 @@ function e2e-spdk-start() {
     # start jsonrpc http proxy
     sudo docker exec -id "${SPDK_CONTAINER}" /root/spdk/scripts/rpc_http_proxy.py ${JSONRPC_IP} ${JSONRPC_PORT} ${JSONRPC_USER} ${JSONRPC_PASS}
     echo "======== start sma server at ${SMA_ADDRESS}:${SMA_PORT} ========"
-    sudo docker exec -id "${SPDK_CONTAINER}" "${SMA_SERVER}" --address "${SMA_ADDRESS}" --port "${SMA_PORT}"
+    sudo docker exec -i "${SPDK_CONTAINER}" sed -e "s/port:.*/port: ${SMA_PORT}/g" -i /root/sma.yaml
+    sudo docker exec -d "${SPDK_CONTAINER}" "${SMA_SERVER}" --config /root/sma.yaml
     sleep 1
     while ! nc -z "${SMA_ADDRESS}" "${SMA_PORT}"; do
         sleep 1

@@ -1,0 +1,5 @@
+address: 'localhost'
+socket: '/var/tmp/spdk.sock'
+port: 5114
+devices:
+  - name: 'nvmf_tcp'
