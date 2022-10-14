@@ -36,7 +36,7 @@
 # kubectl delete -f deploy/kubernetes/testpod.yaml
 # e2e-delete-deployments
 
-SPDKCSI_DIR="$(dirname "${BASH_SOURCE}")/.."
+SPDKCSI_DIR="$(dirname "${BASH_SOURCE[@]}")/.."
 
 DIR="${SPDKCSI_DIR}/scripts/ci"
 # shellcheck source=scripts/ci/env
@@ -108,7 +108,7 @@ function e2e-sma-trace() {
 }
 
 function e2e-k8s-start() {
-    ${SPDKCSI_DIR}/scripts/minikube.sh up
+    "${SPDKCSI_DIR}"/scripts/minikube.sh up
 }
 
 function e2e-k8s-stop() {
@@ -132,6 +132,7 @@ function e2e-spdk-stop() {
 }
 
 function e2e-spdk-build() {
+    docker_proxy_opt=("--build-arg" "http_proxy=$HTTP_PROXY" "--build-arg" "https_proxy=$HTTPS_PROXY")
     docker build -t "${SPDK_IMAGE}" -f "${SPDKCSI_DIR}/deploy/spdk/Dockerfile" "${docker_proxy_opt[@]}" --build-arg TAG="${SPDK_VERSION}" "${SPDKCSI_DIR}/deploy/spdk" && echo "${SPDK_IMAGE} from version ${SPDK_VERSION} build successfully"
 }
 
@@ -157,7 +158,14 @@ function e2e-spdk-start() {
     sudo docker exec -id "${SPDK_CONTAINER}" /root/spdk/scripts/rpc_http_proxy.py ${JSONRPC_IP} ${JSONRPC_PORT} ${JSONRPC_USER} ${JSONRPC_PASS}
     echo "======== start sma server at ${SMA_ADDRESS}:${SMA_PORT} ========"
     sudo docker exec -i "${SPDK_CONTAINER}" sed -e "s/port:.*/port: ${SMA_PORT}/g" -i /root/sma.yaml
+
+    # prepare the target
+    # sudo docker exec -i "${SPDK_CONTAINER}" /root/spdk/scripts/rpc.py bdev_null_create null0 100 4096
+    # create TCP transports
+    # sudo docker exec -i "${SPDK_CONTAINER}" timeout 5s /root/spdk/scripts/rpc.py nvmf_get_transports --trtype tcp
+    # start sma server
     sudo docker exec -d "${SPDK_CONTAINER}" "${SMA_SERVER}" --config /root/sma.yaml
+
     sleep 1
     while ! nc -z "${SMA_ADDRESS}" "${SMA_PORT}"; do
         sleep 1
@@ -167,7 +175,7 @@ function e2e-spdk-start() {
 }
 
 function e2e-node-logs() {
-    kubectl logs $(kubectl get pods | awk '/spdkcsi-node-/{print $1}') spdkcsi-node
+    kubectl logs "$(kubectl get pods | awk '/spdkcsi-node-/{print $1}')" spdkcsi-node
 }
 
 function e2e-controller-logs() {
@@ -179,13 +187,12 @@ function e2e-delete-deployments() {
         kubectl delete daemonsets --all --now &
         kubectl delete statefulsets --all --now &
         kubectl delete configmaps --all --now &
-        kubectl delete namespaces $(kubectl get namespaces | awk '/spdkcsi-/{print $1}') &
+        kubectl delete namespaces "$(kubectl get namespaces | awk '/spdkcsi-/{print $1}')" &
         wait
     )
 }
 
 function e2e-node-debug() {
-    local pid_of_spkdcsi_node
     pid_of_spdkcsi_node="$(pgrep -f '/usr/local/bin/spdkcsi.*--node$')"
     [ -n "$pid_of_spdkcsi_node" ] || {
         echo "cannot find pid of: spdkcsi --node"
@@ -195,7 +202,6 @@ function e2e-node-debug() {
 }
 
 function e2e-controller-debug() {
-    local pid_of_spkdcsi_controller
     pid_of_spdkcsi_controller="$(pgrep -f '/usr/local/bin/spdkcsi.*--controller$')"
     [ -n "$pid_of_spdkcsi_controller" ] || {
         echo "cannot find pid of: spdkcsi --controller"
@@ -205,10 +211,12 @@ function e2e-controller-debug() {
 }
 
 function e2e-debug-pid() {
-    local pid="$1"
-    local dlv="$(command -v dlv 2>/dev/null)"
+    local pid
+    pid="$1"
+    local dlv
+    dlv="$(command -v dlv 2>/dev/null)"
     [ -n "$dlv" ] || {
-        echo 'dlv not found. Tip: go install github.com/go-delve/delve@latest; PATH=$PATH:$HOME/go/bin'
+        echo "dlv not found. Tip: go install github.com/go-delve/delve/cmd/dlv@latest; PATH=$PATH:$HOME/go/bin"
         return 1
     }
     echo "Attaching $dlv to $pid"
@@ -224,7 +232,7 @@ function e2e-spdkcsi-start() {
     (
         set -e -x
         cd "${SPDKCSI_DIR}/deploy/kubernetes"
-        source ./deploy.sh
+        /bin/bash deploy.sh
     )
 }
 
@@ -232,7 +240,7 @@ function e2e-spdkcsi-stop() {
     (
         set -e -x
         cd "${SPDKCSI_DIR}/deploy/kubernetes"
-        source ./deploy.sh teardown
+        /bin/bash deploy.sh teardown
     )
 }
 

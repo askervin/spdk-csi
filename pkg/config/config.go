@@ -34,8 +34,8 @@ type GlobalConfig struct {
 
 //nolint:tagliatelle // not using json:snake case
 type SmaConfig struct {
-	Server       string         `json:"server"`
-	ClassConfig  SmaClassConfig `json:"classConfig"`
+	Server      string         `json:"server"`
+	ClassConfig SmaClassConfig `json:"classConfig"`
 }
 
 //nolint:tagliatelle // not using json:snake case
