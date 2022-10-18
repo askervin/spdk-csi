@@ -7,14 +7,14 @@ require (
 	github.com/google/uuid v1.1.2
 	github.com/kubernetes-csi/csi-lib-utils v0.7.0
 	github.com/onsi/gomega v1.19.0
-	google.golang.org/grpc v1.47.0
+	github.com/spdk/spdk/apis/go v0.0.0-00010101000000-000000000000
+	google.golang.org/grpc v1.50.1
 	google.golang.org/protobuf v1.28.1
 	k8s.io/apimachinery v0.25.0
 	k8s.io/client-go v0.25.0
 	k8s.io/klog v1.0.0
 	k8s.io/kubernetes v1.25.0
 	k8s.io/utils v0.0.0-20220728103510-ee6ede2d64ed
-	spdk.io/sma v0.0.0-00010101000000-000000000000
 )
 
 require k8s.io/api v0.25.0 // indirect
@@ -99,6 +99,7 @@ require (
 require k8s.io/api v0.25.0 // indirect
 
 replace (
+	github.com/spdk/spdk/apis/go => github.com/askervin/spdk/apis/go v0.0.0-20221019121042-73e1c3922767
 	// https://github.com/etcd-io/etcd/issues/11563
 	google.golang.org/grpc => google.golang.org/grpc v1.47.0
 	k8s.io/api => k8s.io/api v0.25.0
@@ -123,5 +124,4 @@ replace (
 	k8s.io/metrics => k8s.io/metrics v0.25.0
 	k8s.io/pod-security-admission => k8s.io/pod-security-admission v0.25.0
 	k8s.io/sample-apiserver => k8s.io/sample-apiserver v0.25.0
-	spdk.io/sma => ./pkg/proto/spdk.io/sma
 )

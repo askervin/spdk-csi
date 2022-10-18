@@ -33,8 +33,8 @@ import (
 
 	// grpc stuff
 
-	smarpc "spdk.io/sma"
-	"spdk.io/sma/nvmf_tcp"
+	smarpc "github.com/spdk/spdk/apis/go/sma"
+	"github.com/spdk/spdk/apis/go/sma/nvmf_tcp"
 
 	spdkcsiConfig "github.com/spdk/spdk-csi/pkg/config"
 )

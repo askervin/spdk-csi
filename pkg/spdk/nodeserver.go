@@ -32,7 +32,7 @@ import (
 	csicommon "github.com/spdk/spdk-csi/pkg/csi-common"
 	"github.com/spdk/spdk-csi/pkg/util"
 
-	"spdk.io/sma"
+	"github.com/spdk/spdk/apis/go/sma"
 )
 
 type nodeServer struct {
