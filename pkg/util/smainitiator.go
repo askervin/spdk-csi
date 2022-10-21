@@ -33,6 +33,7 @@ import (
 
 	smarpc "github.com/spdk/spdk/apis/go/sma"
 	"github.com/spdk/spdk/apis/go/sma/nvmf_tcp"
+	"github.com/spdk/spdk/apis/go/sma/virtio_blk"
 
 	spdkcsiConfig "github.com/spdk/spdk-csi/pkg/config"
 )
@@ -40,7 +41,6 @@ import (
 func NewSpdkCsiSmaInitiator(volumeContext map[string]string) (SpdkCsiInitiator, error) {
 	targetType := strings.ToLower(volumeContext["targetType"])
 	klog.Infof("SMA in volumeContext, use legacy connection to %v", volumeContext["model"])
-	isma := initiatorSMA{volumeContext: volumeContext}
 	smaConfigString, ok := volumeContext["sma"]
 	if !ok {
 		return nil, fmt.Errorf("volumeContext does not include \"sma\"")
@@ -50,34 +50,37 @@ func NewSpdkCsiSmaInitiator(volumeContext map[string]string) (SpdkCsiInitiator, 
 	if err != nil {
 		return nil, fmt.Errorf("invalid SMA configuration: %q (%w)", smaConfigString, err)
 	}
-	isma.serverURL = smaConfig.Server
+	iSmaCommon := &smaCommon{
+		volumeContext: volumeContext,
+		serverURL:     smaConfig.Server,
+	}
 	switch targetType {
 	case "tcp":
-		isma.req = &smarpc.CreateDeviceRequest{
-			Volume: nil,
-			Params: &smarpc.CreateDeviceRequest_NvmfTcp{
-				NvmfTcp: &nvmf_tcp.DeviceParameters{
-					Subnqn:  volumeContext["nqn"],
-					Adrfam:  "ipv4",
-					Traddr:  volumeContext["targetAddr"],
-					Trsvcid: "4420",
-				},
-			},
-		}
+		return &initiatorSmaNvmf{sma: iSmaCommon}, nil
+	case "virtio-blk":
+		return &initiatorSmaVirtioBlk{sma: iSmaCommon}, nil
 	default:
 		klog.Errorf("Unsupported SMA target type in %v", volumeContext)
-		return nil, fmt.Errorf("unknown SMA target type: %q", volumeContext["targetType"])
 	}
-	return &isma, nil
+	return nil, fmt.Errorf("unknown SMA target type: %q", volumeContext["targetType"])
 }
 
-type initiatorSMA struct {
+type smaCommon struct {
 	serverURL     string
-	req           *smarpc.CreateDeviceRequest
+	deviceHandle  string // non-empty when connected
 	volumeContext map[string]string
 }
 
-func (sma *initiatorSMA) SMAClient() smarpc.StorageManagementAgentClient {
+type initiatorSmaNvmf struct {
+	subnqn string
+	sma    *smaCommon
+}
+
+type initiatorSmaVirtioBlk struct {
+	sma *smaCommon
+}
+
+func (sma *smaCommon) NewClient() smarpc.StorageManagementAgentClient {
 	var conn *grpc.ClientConn
 	/* TODO: Fix error in dialing: either return (client, error)
 	   and check the error from the caller, or
@@ -92,7 +95,7 @@ func (sma *initiatorSMA) SMAClient() smarpc.StorageManagementAgentClient {
 	return client
 }
 
-func (sma *initiatorSMA) SMAtovolUUID() []byte {
+func (sma *smaCommon) SMAtovolUUID() []byte {
 	volUUID := uuid.MustParse(sma.volumeContext["model"])
 	volUUIDBytes, err := volUUID.MarshalBinary()
 	if err != nil {
@@ -101,16 +104,16 @@ func (sma *initiatorSMA) SMAtovolUUID() []byte {
 	return volUUIDBytes
 }
 
-func (sma *initiatorSMA) SMActx() (context.Context, context.CancelFunc) {
+func (sma *smaCommon) SMActx() (context.Context, context.CancelFunc) {
 	ctxTimeout, cancel := context.WithTimeout(context.Background(), 42*time.Second)
 	return ctxTimeout, cancel
 }
 
-func (sma *initiatorSMA) SMACreateDevice() string {
+func (sma *smaCommon) CreateDevice(req *smarpc.CreateDeviceRequest) string {
 	ctxTimeout, cancel := sma.SMActx()
 	defer cancel()
 	// Create device
-	response, err := sma.SMAClient().CreateDevice(ctxTimeout, sma.req)
+	response, err := sma.NewClient().CreateDevice(ctxTimeout, req)
 	if err != nil {
 		klog.Errorf("Creating device failed: %s", err)
 	}
@@ -119,12 +122,41 @@ func (sma *initiatorSMA) SMACreateDevice() string {
 	return response.Handle
 }
 
-func (sma *initiatorSMA) Connect() (string, error) {
-	ctxTimeout, cancel := sma.SMActx()
+func (i *initiatorSmaVirtioBlk) Connect() (string, error) {
+	req := &smarpc.CreateDeviceRequest{
+		Volume: nil,
+		Params: &smarpc.CreateDeviceRequest_VirtioBlk{
+			VirtioBlk: &virtio_blk.DeviceParameters{
+				PhysicalId: 424242,
+				VirtualId:  424242,
+			},
+		},
+	}
+	return "", fmt.Errorf("NOT IMPLEMENTED: i.sma.CreateDevice(%v)...", req)
+}
+
+func (i *initiatorSmaVirtioBlk) Disconnect() error {
+	return fmt.Errorf("NOT IMPLEMENTED: i.sma.DeleteDevice(%v)...")
+}
+
+func (i *initiatorSmaNvmf) Connect() (string, error) {
+	ctxTimeout, cancel := i.sma.SMActx()
 	defer cancel()
+	req := &smarpc.CreateDeviceRequest{
+		Volume: nil,
+		Params: &smarpc.CreateDeviceRequest_NvmfTcp{
+			NvmfTcp: &nvmf_tcp.DeviceParameters{
+				Subnqn:  i.sma.volumeContext["nqn"],
+				Adrfam:  "ipv4",
+				Traddr:  i.sma.volumeContext["targetAddr"],
+				Trsvcid: "4420",
+			},
+		},
+	}
+
 	// Connect to device
 	cmdLine := []string{
-		"nvme", "connect", "-t", "tcp", "-a", "127.0.0.1", "-s", "4420", "-n", sma.req.GetNvmfTcp().Subnqn,
+		"nvme", "connect", "-t", "tcp", "-a", "127.0.0.1", "-s", "4420", "-n", req.GetNvmfTcp().Subnqn,
 	}
 	err := execWithTimeout(cmdLine, 40)
 	if err != nil {
@@ -134,15 +166,16 @@ func (sma *initiatorSMA) Connect() (string, error) {
 		klog.Infof("nvme connect succeeded!")
 	}
 
-	deviceHandle := sma.SMACreateDevice()
+	i.sma.deviceHandle = i.sma.CreateDevice(req)
+	i.subnqn = req.GetNvmfTcp().Subnqn
 
 	// Attach volume
 	attachReq := &smarpc.AttachVolumeRequest{
-		Volume:       &smarpc.VolumeParameters{VolumeId: sma.SMAtovolUUID()},
-		DeviceHandle: deviceHandle,
+		Volume:       &smarpc.VolumeParameters{VolumeId: i.sma.SMAtovolUUID()},
+		DeviceHandle: i.sma.deviceHandle,
 	}
 
-	attachRes, err := sma.SMAClient().AttachVolume(ctxTimeout, attachReq)
+	attachRes, err := i.sma.NewClient().AttachVolume(ctxTimeout, attachReq)
 	if err != nil {
 		klog.Errorf("Attaching volume failed: %s", err)
 	} else {
@@ -150,7 +183,7 @@ func (sma *initiatorSMA) Connect() (string, error) {
 	}
 
 	// Check the device path
-	deviceGlob := fmt.Sprintf("/dev/disk/by-id/*%s*", sma.volumeContext["model"])
+	deviceGlob := fmt.Sprintf("/dev/disk/by-id/*%s*", i.sma.volumeContext["model"])
 	devicePath, err := waitForDeviceReady(deviceGlob, 20)
 	if err != nil {
 		return "", err
@@ -160,19 +193,20 @@ func (sma *initiatorSMA) Connect() (string, error) {
 	return devicePath, nil
 }
 
-func (sma *initiatorSMA) Disconnect() error {
-	ctxTimeout, cancel := sma.SMActx()
+func (i *initiatorSmaNvmf) Disconnect() error {
+	ctxTimeout, cancel := i.sma.SMActx()
 	defer cancel()
 
-	deviceHandle := sma.SMACreateDevice()
+	// deviceHandle := i.sma.SMACreateDevice()
+	// TODO: if i.sma.deviceHandle is empty...
 
 	// Detach volume
 	detachReq := &smarpc.DetachVolumeRequest{
-		VolumeId:     sma.SMAtovolUUID(),
-		DeviceHandle: deviceHandle,
+		VolumeId:     i.sma.SMAtovolUUID(),
+		DeviceHandle: i.sma.deviceHandle,
 	}
 
-	detachRes, err := sma.SMAClient().DetachVolume(ctxTimeout, detachReq)
+	detachRes, err := i.sma.NewClient().DetachVolume(ctxTimeout, detachReq)
 	if err != nil {
 		klog.Errorf("Detaching volume failed: %s", err)
 	} else {
@@ -181,7 +215,7 @@ func (sma *initiatorSMA) Disconnect() error {
 
 	// Disconnect device
 	cmdLine := []string{
-		"nvme", "disconnect", "-n", sma.req.GetNvmfTcp().Subnqn,
+		"nvme", "disconnect", "-n", i.subnqn,
 	}
 	err = execWithTimeout(cmdLine, 40)
 	if err != nil {
@@ -192,13 +226,13 @@ func (sma *initiatorSMA) Disconnect() error {
 	}
 
 	// Delete device
-	deviceGlob := fmt.Sprintf("/dev/disk/by-id/*%s*", sma.volumeContext["model"])
+	deviceGlob := fmt.Sprintf("/dev/disk/by-id/*%s*", i.sma.volumeContext["model"])
 	errwaitForDeviceGone := waitForDeviceGone(deviceGlob, 20)
 	if errwaitForDeviceGone == nil {
 		deleteReq := &smarpc.DeleteDeviceRequest{
-			Handle: deviceHandle,
+			Handle: i.sma.deviceHandle,
 		}
-		detachRes, err := sma.SMAClient().DeleteDevice(ctxTimeout, deleteReq)
+		detachRes, err := i.sma.NewClient().DeleteDevice(ctxTimeout, deleteReq)
 		if err != nil {
 			klog.Errorf("Deleting subnqn failed: %s", err)
 		} else {
