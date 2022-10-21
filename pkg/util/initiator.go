@@ -245,9 +245,14 @@ type initiatorSMA struct {
 
 func (sma *initiatorSMA) SMAClient() smarpc.StorageManagementAgentClient {
 	var conn *grpc.ClientConn
+	/* TODO: Fix error in dialing: either return (client, error)
+	   and check the error from the caller, or
+	   implement grpc ClientConnectionInterface where Invoke returns
+	   a "service not available" error or similar */
 	conn, err := grpc.Dial(sma.serverURL, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		klog.Errorf("failed to connect to SMA grpc server in: %s, %s", sma.serverURL, err)
+		return nil
 	}
 	client := smarpc.NewStorageManagementAgentClient(conn)
 	return client

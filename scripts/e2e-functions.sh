@@ -13,8 +13,8 @@
 # e2e-spdk-start                    # start spdk target and SMA server
 # e2e-spdkcsi-build                 # build spdkcsi image
 # e2e-test                          # launch go test -test.v ./e2e
-# e2e-controller-logs               # see spdkcsi controller logs
-# e2e-node-logs                     # see spdkcsi node logs
+# e2e-controller-logs [-f]          # see spdkcsi controller logs
+# e2e-node-logs [-f]                # see spdkcsi node logs
 # e2e-controller-debug              # debug spdkcsi controller
 # e2e-node-debug                    # debug spdkcsi node
 # e2e-spdkcsi-stop                  # clear test pods and namespaces
@@ -175,11 +175,11 @@ function e2e-spdk-start() {
 }
 
 function e2e-node-logs() {
-    kubectl logs "$(kubectl get pods | awk '/spdkcsi-node-/{print $1}')" spdkcsi-node
+    kubectl logs "$(kubectl get pods | awk '/spdkcsi-node-/{print $1}')" spdkcsi-node "$@"
 }
 
 function e2e-controller-logs() {
-    kubectl logs spdkcsi-controller-0 spdkcsi-controller
+    kubectl logs spdkcsi-controller-0 spdkcsi-controller "$@"
 }
 
 function e2e-delete-deployments() {
