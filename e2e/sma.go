@@ -58,6 +58,22 @@ var _ = ginkgo.Describe("SPDKCSI-SMA", func() {
 					ginkgo.Fail(err.Error())
 				}
 			})
+
+			ginkgo.By("check data persistency after the pod is removed and recreated", func() {
+				deployPVC()
+				deployTestPod()
+				defer deletePVCAndTestPod()
+
+				err := waitForTestPodReady(f.ClientSet, 3*time.Minute)
+				if err != nil {
+					ginkgo.Fail(err.Error())
+				}
+
+				err = checkDataPersist(f)
+				if err != nil {
+					ginkgo.Fail(err.Error())
+				}
+			})
 		})
 	})
 })
