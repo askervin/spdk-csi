@@ -130,8 +130,6 @@ func NewSpdkNode(rpcURL, rpcUser, rpcPass, targetType, targetAddr string) (SpdkN
 		return newNVMf(&client, "TCP", targetAddr), nil
 	case "iscsi":
 		return newISCSI(&client, targetAddr), nil
-	case "sma":
-		return newSMA(&client, targetAddr), nil
 	default:
 		return nil, fmt.Errorf("unknown transport: %s", targetType)
 	}
