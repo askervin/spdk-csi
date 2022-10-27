@@ -142,13 +142,19 @@ function e2e-k8s-worker-start() {
         echo "instance-id: e2e-k8s-worker-start" > meta-data
         cat > user-data << EOF
 #cloud-config
+preserve_hostname: False
+hostname: e2eworker
 disable_root: False
-password: fedora
 chpasswd: { expire: False }
 ssh_pwauth: True
 users:
 - name: root
   lock_passwd: False
+  ssh_authorized_keys:
+  - $(< ~/.ssh/id_rsa.pub)
+- name: fedora
+  lock_passwd: False
+  passwd: "$(echo fedora | mkpasswd -s)"
   ssh_authorized_keys:
   - $(< ~/.ssh/id_rsa.pub)
 - name: debug
@@ -168,7 +174,7 @@ chpasswd:
   expire: False
   users:
   - name: root
-    password: "$(echo debug | mkpasswd -s)"
+    password: "$(echo root | mkpasswd -s)"
 EOF
         cloud-localds "${cloud_iso}" user-data meta-data
     )
@@ -184,17 +190,97 @@ EOF
 }
 
 function e2e-k8s-worker-install-DELME() {
+    local kubeadm_join
+    kubeadm_join=$(kubeadm token create --print-join-command)
+    if [[ "${kubeadm_join}" != "kubeadm "* ]]; then
+        echo "failed to find valid kubeadm join command with 'kubeadm token create --print-join-command': $kubeadm_join"
+        return 1
+    fi
+
     SCP="scp -P ${K8S_WORKER_SSH_PORT}"
+    SSH="ssh -p ${K8S_WORKER_SSH_PORT} root@localhost"
     WORKER="root@localhost"
     local kubeadm_bin
     local kubelet_bin
+    local crictl_bin
     kubeadm_bin=$(command -v kubeadm)
     kubelet_bin=$(command -v kubelet)
-    (
-        set -x
-        $SCP "${kubeadm_bin}" ${WORKER}:/usr/local/bin/
-        $SCP "${kubelet_bin}" ${WORKER}:/usr/local/bin/
+    crictl_bin=$(command -v crictl)
+
+    # Configure proxies
+    if [ -n "$http_proxy" ]; then
+        for vars in "filep='' linep='' file='/etc/environment'" \
+                        "filep='' linep='export ' file='/etc/profile.d/proxy.sh'" \
+                        "filep='[Service]' linep='Environment=' file='/etc/systemd/system/containerd.service.d/proxy.conf'"
+        do
+            ( eval $vars
+              ext_no_proxy=192.168.0.0/16,172.16.0.0/12,10.0.0.0/8,.internal
+              cat <<EOF |
+${filep}
+${linep}http_proxy=$http_proxy
+${linep}https_proxy=$https_proxy
+${linep}ftp_proxy=$ftp_proxy
+${linep}no_proxy=$no_proxy,$ext_no_proxy
+${linep}HTTP_PROXY=$http_proxy
+${linep}HTTPS_PROXY=$https_proxy
+${linep}FTP_PROXY=$ftp_proxy
+${linep}NO_PROXY=$no_proxy,$ext_no_proxy
+EOF
+              $SSH "mkdir -p $(dirname "$file"); cat > $file"
+            )
+        done
+    fi
+
+    # Create kubelet.service
+    cat <<EOF |
+[Unit]
+Description=kubelet: The Kubernetes Node Agent
+Documentation=https://kubernetes.io/docs/
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/kubelet --bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfig=/etc/kubernetes/kubelet.conf --config=/var/lib/kubelet/config.yaml --container-runtime-endpoint=unix:///var/run/containerd/containerd.sock --pod-infra-container-image=k8s.gcr.io/pause:3.4.1
+Restart=always
+StartLimitInterval=0
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    $SSH "mkdir -p /etc/systemd/system; cat > /etc/systemd/system/kubelet.service"
+
+    # Add certs, containernetworking plugins and necessary binaries
+    ( cd /
+      tar czf - /var/lib/minikube/certs /etc/cni /opt/cni | $SSH "tar -C / -xzvf -"
+      for host_bin in ${kubeadm_bin} ${kubelet_bin} ${crictl_bin}; do
+          $SCP "${host_bin}" $WORKER:/usr/local/bin
+      done
     )
+
+    # Install packages, load modules, disable swap...
+    local k8s_master_ip
+    k8s_master_ip=$(awk '{print $3}' <<< "${kubeadm_join/:*/}")
+    $SSH "set -x
+          modprobe bridge 2>/dev/null && echo bridge >> /etc/modules-load.d/k8s.conf
+          modprobe nf-tables-bridge 2>/dev/null && echo nf-tables-bridge >> /etc/modules-load.d/k8s.conf
+          modprobe br_netfilter 2>/dev/null && echo br_netfilter >> /etc/modules-load.d/k8s.conf
+          echo 1 > /proc/sys/net/ipv4/ip_forward
+          dnf install -y iproute-tc containerd conntrack iptables
+          systemctl enable containerd
+          systemctl start containerd
+          grep -q control-plane /etc/hosts || echo '${k8s_master_ip}  control-plane.minikube.internal' >> /etc/hosts
+          grep -q PATH= /etc/environment || {
+              export PATH=\$PATH:/usr/local/bin
+              echo PATH=\$PATH >> /etc/environment
+          }
+          systemctl disable dev-zram0.swap
+          systemctl stop dev-zram0.swap
+          [ -f /etc/kubernetes/kubelet.conf ] && {
+              yes | kubeadm reset
+          }
+          ${kubeadm_join}
+          "
 }
 
 function e2e-k8s-worker-stop() {
