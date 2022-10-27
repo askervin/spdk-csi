@@ -51,6 +51,7 @@ SMA_CLIENT=/root/spdk/scripts/sma-client.py
 SMA_SERVER=/root/spdk/scripts/sma.py
 SMA_ADDRESS="${SMA_ADDRESS:-localhost}"
 SMA_PORT="${SMA_PORT:-5114}"
+K8S_WORKER_SSH_PORT=${K8S_WORKER_SSH_PORT:-10000}
 
 if ! command -v kubectl >&/dev/null; then
     if [ -x /var/lib/minikube/binaries/${KUBE_VERSION}/kubectl ]; then
@@ -141,10 +142,15 @@ function e2e-k8s-worker-start() {
         echo "instance-id: e2e-k8s-worker-start" > meta-data
         cat > user-data << EOF
 #cloud-config
+disable_root: False
 password: fedora
 chpasswd: { expire: False }
 ssh_pwauth: True
 users:
+- name: root
+  lock_passwd: False
+  ssh_authorized_keys:
+  - $(< ~/.ssh/id_rsa.pub)
 - name: debug
   shell: /bin/bash
   lock_passwd: False
@@ -158,6 +164,11 @@ users:
   ssh_authorized_keys:
   - $(< ~/.ssh/id_rsa.pub)
   sudo: ALL=(ALL) NOPASSWD:ALL
+chpasswd:
+  expire: False
+  users:
+  - name: root
+    password: "$(echo debug | mkpasswd -s)"
 EOF
         cloud-localds "${cloud_iso}" user-data meta-data
     )
@@ -165,9 +176,25 @@ EOF
         echo "failed to create cloud-init image ${cloud_iso}"
         return 1
     }
-    ${qemu} -m 1024 -machine accel=kvm -drive file="${fedora_qcow2}",if=virtio,format=qcow2 -drive file="${cloud_iso}",if=virtio -nographic -netdev user,id=mynet0,hostfwd=tcp::2222-:22 -device virtio-net-pci,netdev=mynet0
+    ${qemu} -m 1024 -machine accel=kvm -drive file="${fedora_qcow2}",if=virtio,format=qcow2 -drive file="${cloud_iso}",if=virtio -nographic -netdev user,id=mynet0,hostfwd=tcp::${K8S_WORKER_SSH_PORT}-:22 -device virtio-net-pci,netdev=mynet0
 
-    echo "work-in-progress... login to vm: ssh -p 2222 sys_sgci@localhost"
+    echo "work-in-progress... login to vm: ssh -p ${K8S_WORKER_SSH_PORT} sys_sgci@localhost"
+    SCP="scp -P ${K8S_WORKER_SSH_PORT}"
+    WORKER="root@localhost"
+}
+
+function e2e-k8s-worker-install-DELME() {
+    SCP="scp -P ${K8S_WORKER_SSH_PORT}"
+    WORKER="root@localhost"
+    local kubeadm_bin
+    local kubelet_bin
+    kubeadm_bin=$(command -v kubeadm)
+    kubelet_bin=$(command -v kubelet)
+    (
+        set -x
+        $SCP "${kubeadm_bin}" ${WORKER}:/usr/local/bin/
+        $SCP "${kubelet_bin}" ${WORKER}:/usr/local/bin/
+    )
 }
 
 function e2e-k8s-worker-stop() {

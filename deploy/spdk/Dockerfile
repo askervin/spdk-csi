@@ -19,7 +19,7 @@ RUN git clone https://github.com/spdk/spdk --branch ${TAG} --depth 1 && \
 RUN pip3 install grpcio-tools==1.14.1 protobuf==3.12.4
 
 RUN cd spdk && \
-    ./configure --disable-tests --without-vhost --without-virtio \
+    ./configure --disable-tests --with-vhost --with-virtio \
                 --with-rdma --target-arch=${ARCH} --with-sma && \
     make
 
