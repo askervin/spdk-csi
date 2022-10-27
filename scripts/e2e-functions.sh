@@ -115,6 +115,65 @@ function e2e-k8s-stop() {
     minikube delete
 }
 
+function e2e-k8s-worker-start() {
+    local workerdir=/tmp/e2e-k8s-worker
+    local fedora_qcow2=${workerdir}/fedora-cloud-base.qcow2
+    local cloudisodir=${workerdir}/cloud-init-iso-root
+    local cloud_iso=${workerdir}/seed.iso
+    local qemu=${QEMU:-qemu-system-x86_64}
+    local required_cmd
+    mkdir -p "$(dirname ${fedora_qcow2})"
+    mkdir -p "${cloudisodir}"
+
+    for required_cmd in curl mkpasswd cloud-localds "${qemu}"; do
+        command -v "${required_cmd}" >/dev/null || {
+            echo "missing: ${required_cmd}"
+            return 1
+        }
+    done
+
+    # Download the cloud image if not already present
+    [ -f "${fedora_qcow2}" ] || ( curl -Lk https://fedora.mirrorservice.org/fedora/linux/releases/36/Cloud/x86_64/images/Fedora-Cloud-Base-36-1.5.x86_64.qcow2 > "${fedora_qcow2}" && cp "${fedora_qcow2}" "${fedora_qcow2}.clean" )
+
+    # Prepare cloud-init
+    (
+        cd "${cloudisodir}"
+        echo "instance-id: e2e-k8s-worker-start" > meta-data
+        cat > user-data << EOF
+#cloud-config
+password: fedora
+chpasswd: { expire: False }
+ssh_pwauth: True
+users:
+- name: debug
+  shell: /bin/bash
+  lock_passwd: False
+  passwd: "$(echo debug | mkpasswd -s)"
+  ssh_authorized_keys:
+  - $(< ~/.ssh/id_rsa.pub)
+  sudo: ALL=(ALL) NOPASSWD:ALL
+- name: sys_sgci
+  shell: /bin/bash
+  lock_passwd: False
+  ssh_authorized_keys:
+  - $(< ~/.ssh/id_rsa.pub)
+  sudo: ALL=(ALL) NOPASSWD:ALL
+EOF
+        cloud-localds "${cloud_iso}" user-data meta-data
+    )
+    [ -f "${cloud_iso}" ] || {
+        echo "failed to create cloud-init image ${cloud_iso}"
+        return 1
+    }
+    ${qemu} -m 1024 -machine accel=kvm -drive file="${fedora_qcow2}",if=virtio,format=qcow2 -drive file="${cloud_iso}",if=virtio -nographic -netdev user,id=mynet0,hostfwd=tcp::2222-:22 -device virtio-net-pci,netdev=mynet0
+
+    echo "work-in-progress... login to vm: ssh -p 2222 sys_sgci@localhost"
+}
+
+function e2e-k8s-worker-stop() {
+    :
+}
+
 function e2e-spdk-running() {
     docker inspect "${SPDK_CONTAINER}" >&/dev/null
 }
