@@ -68,8 +68,8 @@ github.com/antihax/optional v1.0.0/go.mod h1:uupD/76wgC+ih3iEmQUL+0Ugr19nfwCT1kd
 github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5 h1:0CwZNZbxp69SHPdPJAN/hZIm0C4OItdklCFmMRWYpio=
 github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5/go.mod h1:wHh0iHkYZB8zMSxRWpUBQtwG5a7fFgvEO+odwuTv2gs=
 github.com/asaskevich/govalidator v0.0.0-20190424111038-f61b66f89f4a/go.mod h1:lB+ZfQJz7igIIfQNfa7Ml4HSf2uFQQRzpGGRXenZAgY=
-github.com/askervin/spdk/apis/go v0.0.0-20221019121042-73e1c3922767 h1:3rE3lelHtYgiNUfyGzn9c4sYP9tU9d/7pNs2CiFw8EQ=
-github.com/askervin/spdk/apis/go v0.0.0-20221019121042-73e1c3922767/go.mod h1:W+xOwrt3KpPyFghN5aVV/PPQ7fimTPV5MiYuLwzf+5M=
+github.com/askervin/spdk/apis/go/sma v0.0.0-20221102145741-05d3bb150c76 h1:AufMvzgtunyWK4Yan7hT2N+aBidIVMD6cXteh5Tncn4=
+github.com/askervin/spdk/apis/go/sma v0.0.0-20221102145741-05d3bb150c76/go.mod h1:cmHuc69hzIq05tlkmBDbzp/vTmT5eMbMbsuNK4CsgWA=
 github.com/benbjohnson/clock v1.0.3/go.mod h1:bGMdMPoPVvcYyt1gHDf4J2KE153Yf9BuiUKYMaxlTDM=
 github.com/benbjohnson/clock v1.1.0 h1:Q92kusRqC1XV2MjkWETPvjJVqKetz1OzxZB7mHJLju8=
 github.com/benbjohnson/clock v1.1.0/go.mod h1:J11/hYXuz8f4ySSvYwY0FKfm+ezbsZBKZxNJlLklBHA=
