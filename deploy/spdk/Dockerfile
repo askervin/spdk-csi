@@ -7,9 +7,9 @@ ARG TAG=v21.04
 ARG ARCH=native
 
 WORKDIR /root
-RUN dnf install -y git diffutils procps-ng pip
+RUN dnf install -y git diffutils procps-ng pip kmod
 RUN git clone https://github.com/spdk/spdk --branch ${TAG} --depth 1 && \
-    cd spdk && git submodule update --init --depth 1 && scripts/pkgdep.sh --rdma
+    cd spdk && git submodule update --init --depth 1 && scripts/pkgdep.sh --all
 
 # WORKAROUND: fix grpcio/protobuf versions that generate broken _sb2 files:
 # spdk/scripts/sma.py produced error:
@@ -20,7 +20,7 @@ RUN pip3 install grpcio-tools==1.14.1 protobuf==3.12.4
 
 RUN cd spdk && \
     ./configure --disable-tests --with-vhost --with-virtio \
-                --with-rdma --target-arch=${ARCH} --with-sma && \
+                --with-rdma --target-arch=${ARCH} --with-sma --with-vfio-user --with-crypto && \
     make
 
 COPY sma.yaml .
