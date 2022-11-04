@@ -52,6 +52,7 @@ SMA_SERVER=/root/spdk/scripts/sma.py
 SMA_ADDRESS="${SMA_ADDRESS:-localhost}"
 SMA_PORT="${SMA_PORT:-5114}"
 K8S_WORKER_SSH_PORT=${K8S_WORKER_SSH_PORT:-10000}
+K8S_WORKER_QMP_PORT=${K8S_WORKER_QMP_PORT:-9090}
 
 if ! command -v kubectl >&/dev/null; then
     if [ -x /var/lib/minikube/binaries/${KUBE_VERSION}/kubectl ]; then
@@ -184,7 +185,9 @@ EOF
 
     rm -f ${workerdir}/qemu-serial*; mkfifo ${workerdir}/qemu-serial.{in,out}
     ( set -x
-      ${qemu} -m 1024 -machine accel=kvm \
+      ${qemu} -m 1024 -machine accel=kvm -cpu host \
+              -object memory-backend-file,id=mem,size=1024M,mem-path=/dev/hugepages,share=on,prealloc=yes,host-nodes=0,policy=bind \
+              -numa node,memdev=mem \
               -drive file="${fedora_qcow2}",if=virtio,format=qcow2 \
               -drive file="${cloud_iso}",if=virtio \
               -nographic \
@@ -192,6 +195,7 @@ EOF
               -device virtio-net-pci,netdev=mynet0 \
               -chardev pty,id=charserial0 \
               -device isa-serial,chardev=charserial0,id=serial0 \
+              -qmp tcp:localhost:${K8S_WORKER_QMP_PORT},server,nowait -device pci-bridge,chassis_nr=1,id=pci.spdk.0 -device pci-bridge,chassis_nr=2,id=pci.spdk.1 \
               -serial pipe:${workerdir}/qemu-serial >"${workerdir}/qemu-stdout" 2>"${workerdir}/qemu-stderr" &
       echo $! >"${workerdir}/qemu.pid"
     )
@@ -201,12 +205,12 @@ EOF
 
     # Now the virtual machine is booting up. Wait for ssh to start working
     SCP="scp -P ${K8S_WORKER_SSH_PORT}"
-    SSH="ssh -p ${K8S_WORKER_SSH_PORT} root@localhost"
+    K8WSSH="ssh -p ${K8S_WORKER_SSH_PORT} root@localhost"
     WORKER="root@localhost"
 
     ssh-keygen -R "[localhost]:${K8S_WORKER_SSH_PORT}"
     sleep 5
-    echo -n "waiting for successful $SSH"
+    echo -n "waiting for successful $K8WSSH"
     while :; do
         ssh -p ${K8S_WORKER_SSH_PORT} -o StrictHostKeyChecking=accept-new -o ConnectTimeout=1 root@localhost 'echo ssh login to vm works as $(whoami)' 2>/dev/null && break
         sleep 1
@@ -246,7 +250,7 @@ ${linep}HTTPS_PROXY=$https_proxy
 ${linep}FTP_PROXY=$ftp_proxy
 ${linep}NO_PROXY=$no_proxy,$ext_no_proxy
 EOF
-              $SSH "mkdir -p $(dirname "$file"); cat > $file"
+              $K8WSSH "mkdir -p $(dirname "$file"); cat > $file"
             )
         done
     fi
@@ -268,7 +272,7 @@ RestartSec=10
 [Install]
 WantedBy=multi-user.target
 EOF
-    $SSH "mkdir -p /etc/systemd/system; cat > /etc/systemd/system/kubelet.service"
+    $K8WSSH "mkdir -p /etc/systemd/system; cat > /etc/systemd/system/kubelet.service"
 
     # Add certs, containernetworking plugins and necessary binaries
     ( cd /
@@ -277,7 +281,7 @@ EOF
           /etc/cni \
           /opt/cni \
           /etc/kubelet-resolv.conf \
-          | $SSH "tar -C / -xzvf -"
+          | $K8WSSH "tar -C / -xzvf -"
       for host_bin in ${kubeadm_bin} ${kubelet_bin} ${crictl_bin}; do
           $SCP "${host_bin}" $WORKER:/usr/local/bin
       done
@@ -285,12 +289,12 @@ EOF
     # Copy spdkcsi image so that spdkcsi node pod can use the already present image.
     # (Will be imported to containerd image repository later when containerd is installed.)
     ( set -x
-      docker image save spdkcsi/spdkcsi:canary | $SSH "cat > /tmp/spdkcsi.canary.image"
+      docker image save spdkcsi/spdkcsi:canary | $K8WSSH "cat > /tmp/spdkcsi.canary.image"
     )
     # Install packages, load modules, disable swap...
     local k8s_master_ip
     k8s_master_ip=$(awk '{print $3}' <<< "${kubeadm_join/:*/}")
-    $SSH "set -e -x
+    $K8WSSH "set -e -x
           modprobe bridge 2>/dev/null && echo bridge >> /etc/modules-load.d/k8s.conf || :
           modprobe nf-tables-bridge 2>/dev/null && echo nf-tables-bridge >> /etc/modules-load.d/k8s.conf || :
           modprobe br_netfilter 2>/dev/null && echo br_netfilter >> /etc/modules-load.d/k8s.conf || :
@@ -348,10 +352,13 @@ function e2e-spdk-start() {
         return 0
     }
     echo "======== start spdk target ========"
-    # allocate 1024*2M hugepage
-    sudo sh -c 'echo 1024 > /proc/sys/vm/nr_hugepages'
+    # allocate 2048*2M hugepage for both spdk and qemu hugepages
+    sudo sh -c 'echo 2048 > /proc/sys/vm/nr_hugepages'
+    # add host directories to the spdk container that will enable lsmod/modprobe vfio
+    local docker_volumes="-v /sbin:/usr/local/sbin -v /lib/modules:/lib/modules"
+    [ -d /bin/kmod ] && docker_volumes+=" -v /bin/kmod:/bin/kmod"
     # start spdk target
-    sudo docker run -id --name "${SPDK_CONTAINER}" --privileged --net host -v /dev/hugepages:/dev/hugepages -v /dev/shm:/dev/shm ${SPDKIMAGE} /root/spdk/build/bin/spdk_tgt
+    sudo docker run -id --name "${SPDK_CONTAINER}" --privileged --net host -v /dev/hugepages:/dev/hugepages -v /dev/shm:/dev/shm ${docker_volumes} ${SPDKIMAGE} sh -c "HUGEMEM=4096 ./scripts/setup.sh; /root/spdk/build/bin/spdk_tgt"
     sleep 5s
     # wait for spdk target ready
     sudo docker exec -i "${SPDK_CONTAINER}" timeout 5s /root/spdk/scripts/rpc.py framework_wait_init
