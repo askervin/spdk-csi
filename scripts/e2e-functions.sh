@@ -151,7 +151,8 @@ function e2e-k8s-worker-start() {
     fi
 
     # Download the cloud image if not already present
-    [ -f "${fedora_qcow2}" ] || ( curl -Lk https://fedora.mirrorservice.org/fedora/linux/releases/36/Cloud/x86_64/images/Fedora-Cloud-Base-36-1.5.x86_64.qcow2 > "${fedora_qcow2}" && cp "${fedora_qcow2}" "${fedora_qcow2}.clean" )
+    [ -f "${fedora_qcow2}.clean" ] || ( curl -Lk https://fedora.mirrorservice.org/fedora/linux/releases/36/Cloud/x86_64/images/Fedora-Cloud-Base-36-1.5.x86_64.qcow2 > "${fedora_qcow2}.clean" )
+    cp "${fedora_qcow2}.clean" "${fedora_qcow2}"
 
     # Prepare cloud-init
     (
@@ -343,7 +344,13 @@ EOF
 }
 
 function e2e-k8s-worker-stop() {
-    :
+    if [[ $(< "${workerdir}/qemu.pid" ) -gt 0 ]] && [[ -d /proc/$(< "${workerdir}/qemu.pid") ]]; then
+        kubectl delete node e2eworker
+        kill "$(< "${workerdir}/qemu.pid" )"
+        return 0
+    fi
+    echo "e2eworker not running"
+    return 1
 }
 
 function e2e-spdk-running() {
@@ -398,7 +405,7 @@ function e2e-spdk-start() {
     # create TCP transports
     # sudo docker exec -i "${SPDK_CONTAINER}" timeout 5s /root/spdk/scripts/rpc.py nvmf_get_transports --trtype tcp
     # start sma server
-    sudo docker exec -d "${SPDK_CONTAINER}" "${SMA_SERVER}" --config /root/sma.yaml
+    sudo docker exec -d "${SPDK_CONTAINER}" sh -c "${SMA_SERVER} --config /root/sma.yaml >& /var/log/$(basename ${SMA_SERVER}).log"
 
     sleep 1
     while ! nc -z "${SMA_ADDRESS}" "${SMA_PORT}"; do
@@ -409,7 +416,7 @@ function e2e-spdk-start() {
 }
 
 function e2e-node-logs() {
-    kubectl logs "$(kubectl get pods | awk '/spdkcsi-node-/{print $1}')" spdkcsi-node "$@"
+    kubectl logs "$(kubectl get pods -o wide | awk "/spdkcsi-node-.*$(hostname)/{print \$1}")" spdkcsi-node "$@"
 }
 
 function e2e-worker-node-logs() {
