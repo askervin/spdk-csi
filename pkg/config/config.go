@@ -40,7 +40,8 @@ type SmaConfig struct {
 
 //nolint:tagliatelle // not using json:snake case
 type SmaClassConfig struct {
-	Qos map[string]string `json:"qos"`
+	Qos  map[string]string `json:"qos"`
+	Type string            `json:"type"`
 }
 
 func (sc *SmaConfig) JSONString() string {

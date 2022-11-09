@@ -13,6 +13,7 @@ data:
   # sma.server: URL to connect the SMA server on every cluster node,
   #             http://IPADDR:PORT
   #             unix:///path/and/sma.sock
+  # sma.classConfig.type: NvmfTcp, VirtioBlk, Nvme
   config.json: |-
     {
       "nodes": [
@@ -24,6 +25,7 @@ data:
         }
       ],
       "sma": {
-        "server": "127.0.0.1:5114"
+        "server": "127.0.0.1:5114",
+        "classConfig": {"type": "Nvme"}
       }
     }
