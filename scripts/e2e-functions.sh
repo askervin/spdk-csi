@@ -380,7 +380,7 @@ function e2e-spdk-start() {
     local docker_volumes="-v /sbin:/usr/local/sbin -v /lib/modules:/lib/modules"
     [ -d /bin/kmod ] && docker_volumes+=" -v /bin/kmod:/bin/kmod"
     # start spdk target
-    sudo docker run -id --name "${SPDK_CONTAINER}" --privileged --net host -v /dev/hugepages:/dev/hugepages -v /dev/shm:/dev/shm ${docker_volumes} ${SPDKIMAGE} sh -c "HUGEMEM=4096 ./scripts/setup.sh; /root/spdk/build/bin/spdk_tgt"
+    sudo docker run -id --name "${SPDK_CONTAINER}" --privileged --net host -v /dev/hugepages:/dev/hugepages -v /dev/shm:/dev/shm ${docker_volumes} ${SPDKIMAGE} sh -c "HUGEMEM=4096 /root/spdk/scripts/setup.sh; /root/spdk/build/bin/spdk_tgt"
     sleep 5s
     # wait for spdk target ready
     sudo docker exec -i "${SPDK_CONTAINER}" timeout 5s /root/spdk/scripts/rpc.py framework_wait_init
