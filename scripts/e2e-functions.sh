@@ -124,15 +124,31 @@ function e2e-k8s-worker-start() {
     local cloud_iso=${workerdir}/seed.iso
     local qemu=${QEMU:-qemu-system-x86_64}
     local required_cmd
+    local k8s_node_count
+
     mkdir -p "$(dirname ${fedora_qcow2})"
     mkdir -p "${cloudisodir}"
 
-    for required_cmd in curl mkpasswd cloud-localds "${qemu}"; do
+    for required_cmd in curl mkpasswd cloud-localds jq "${qemu}"; do
         command -v "${required_cmd}" >/dev/null || {
             echo "missing: ${required_cmd}"
             return 1
         }
     done
+
+    k8s_node_count=$(kubectl get nodes -o json 2>/dev/null | jq '.items | length')
+    if [ -z "${k8s_node_count}" ] || [ "${k8s_node_count}" == "0" ]; then
+        echo "cannot get nodes from current cluster, run e2e-k8s-start first"
+        return 1
+    fi
+    if [[ "${k8s_node_count}" -gt 1 ]]; then
+        echo "there are already ${k8s_node_count} nodes in the cluster, not starting new"
+        return 1
+    fi
+    if [[ $(< "${workerdir}/qemu.pid" ) -gt 0 ]] && [[ -d /proc/$(< "${workerdir}/qemu.pid") ]]; then
+        echo "worker vm (pid: $(<"${workerdir}/qemu.pid")) is running, not starting new"
+        return 1
+    fi
 
     # Download the cloud image if not already present
     [ -f "${fedora_qcow2}" ] || ( curl -Lk https://fedora.mirrorservice.org/fedora/linux/releases/36/Cloud/x86_64/images/Fedora-Cloud-Base-36-1.5.x86_64.qcow2 > "${fedora_qcow2}" && cp "${fedora_qcow2}" "${fedora_qcow2}.clean" )
@@ -214,6 +230,11 @@ EOF
     while :; do
         ssh -p ${K8S_WORKER_SSH_PORT} -o StrictHostKeyChecking=accept-new -o ConnectTimeout=1 root@localhost 'echo ssh login to vm works as $(whoami)' 2>/dev/null && break
         sleep 1
+        if ! ([[ $(< "${workerdir}/qemu.pid" ) -gt 0 ]] && [[ -d /proc/$(< "${workerdir}/qemu.pid") ]]); then
+            cat "${workerdir}/qemu-stdout" "${workerdir}/qemu-stderr"
+            echo 'error: e2e-k8s-worker vm has died.'
+            return 1
+        fi
         echo -n "."
     done
 
@@ -300,6 +321,7 @@ EOF
           modprobe br_netfilter 2>/dev/null && echo br_netfilter >> /etc/modules-load.d/k8s.conf || :
           echo 1 > /proc/sys/net/ipv4/ip_forward
           dnf install -y iproute-tc containerd conntrack iptables
+          ln -s /opt/cni/bin /usr/libexec/cni
           systemctl enable containerd
           systemctl start containerd
           systemctl enable kubelet
@@ -388,6 +410,14 @@ function e2e-spdk-start() {
 
 function e2e-node-logs() {
     kubectl logs "$(kubectl get pods | awk '/spdkcsi-node-/{print $1}')" spdkcsi-node "$@"
+}
+
+function e2e-worker-node-logs() {
+    local crictl="crictl -r unix:/run/containerd/containerd.sock"
+    $K8WSSH "container_id=\$($crictl ps --name spdkcsi-node | awk '/spdkcsi-node/{print \$1}');
+        [ -z \$container_id ] && { echo spdkcsi-node container not found in worker; return 1; };
+        $crictl logs \$container_id
+        "
 }
 
 function e2e-controller-logs() {
