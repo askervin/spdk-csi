@@ -117,7 +117,7 @@ function e2e-k8s-stop() {
     minikube delete
 }
 
-function e2e-k8s-worker-start() {
+function e2e-vm-k8s-start() {
     local workerdir=/tmp/e2e-k8s-worker
     local fedora_qcow2=${workerdir}/fedora-cloud-base.qcow2
     local cloudisodir=${workerdir}/cloud-init-iso-root
@@ -136,15 +136,6 @@ function e2e-k8s-worker-start() {
         }
     done
 
-    k8s_node_count=$(kubectl get nodes -o json 2>/dev/null | jq '.items | length')
-    if [ -z "${k8s_node_count}" ] || [ "${k8s_node_count}" == "0" ]; then
-        echo "cannot get nodes from current cluster, run e2e-k8s-start first"
-        return 1
-    fi
-    if [[ "${k8s_node_count}" -gt 1 ]]; then
-        echo "there are already ${k8s_node_count} nodes in the cluster, not starting new"
-        return 1
-    fi
     if [[ $(< "${workerdir}/qemu.pid" ) -gt 0 ]] && [[ -d /proc/$(< "${workerdir}/qemu.pid") ]]; then
         echo "worker vm (pid: $(<"${workerdir}/qemu.pid")) is running, not starting new"
         return 1
@@ -202,8 +193,9 @@ EOF
 
     rm -f ${workerdir}/qemu-serial*; mkfifo ${workerdir}/qemu-serial.{in,out}
     ( set -x
-      ${qemu} -m 1024 -machine accel=kvm -cpu host \
-              -object memory-backend-file,id=mem,size=1024M,mem-path=/dev/hugepages,share=on,prealloc=yes,host-nodes=0,policy=bind \
+      ${qemu} -m 2048 -machine accel=kvm -cpu host \
+              -object memory-backend-file,id=mem,size=2048M,mem-path=/dev/hugepages,share=on,prealloc=yes,host-nodes=0,policy=bind \
+              -smp 8,sockets=2,cores=2,threads=2 \
               -numa node,memdev=mem \
               -drive file="${fedora_qcow2}",if=virtio,format=qcow2 \
               -drive file="${cloud_iso}",if=virtio \
@@ -213,6 +205,7 @@ EOF
               -chardev pty,id=charserial0 \
               -device isa-serial,chardev=charserial0,id=serial0 \
               -qmp tcp:localhost:${K8S_WORKER_QMP_PORT},server,nowait -device pci-bridge,chassis_nr=1,id=pci.spdk.0 -device pci-bridge,chassis_nr=2,id=pci.spdk.1 \
+              -device pci-bridge,chassis_nr=3,id=pci.spdk.2 -device pci-bridge,chassis_nr=4,id=pci.spdk.3 \
               -serial pipe:${workerdir}/qemu-serial >"${workerdir}/qemu-stdout" 2>"${workerdir}/qemu-stderr" &
       echo $! >"${workerdir}/qemu.pid"
     )
@@ -239,18 +232,13 @@ EOF
         echo -n "."
     done
 
-    local kubeadm_join
-    kubeadm_join=$(kubeadm token create --print-join-command)
-    if [[ "${kubeadm_join}" != "kubeadm "* ]]; then
-        echo "failed to find valid kubeadm join command with 'kubeadm token create --print-join-command': $kubeadm_join"
-        return 1
-    fi
-
     local kubeadm_bin
     local kubelet_bin
+    local kubectl_bin
     local crictl_bin
     kubeadm_bin=$(command -v kubeadm)
     kubelet_bin=$(command -v kubelet)
+    kubectl_bin=$(command -v kubectl)
     crictl_bin=$(command -v crictl)
 
     # Configure proxies
@@ -299,12 +287,11 @@ EOF
     # Add certs, containernetworking plugins and necessary binaries
     ( cd /
       tar czf - \
-          /var/lib/minikube/certs \
           /etc/cni \
           /opt/cni \
           /etc/kubelet-resolv.conf \
           | $K8WSSH "tar -C / -xzvf -"
-      for host_bin in ${kubeadm_bin} ${kubelet_bin} ${crictl_bin}; do
+      for host_bin in ${kubeadm_bin} ${kubelet_bin} ${kubectl_bin} ${crictl_bin}; do
           $SCP "${host_bin}" $WORKER:/usr/local/bin
       done
     )
@@ -314,19 +301,20 @@ EOF
       docker image save spdkcsi/spdkcsi:canary | $K8WSSH "cat > /tmp/spdkcsi.canary.image"
     )
     # Install packages, load modules, disable swap...
-    local k8s_master_ip
-    k8s_master_ip=$(awk '{print $3}' <<< "${kubeadm_join/:*/}")
     $K8WSSH "set -e -x
           modprobe bridge 2>/dev/null && echo bridge >> /etc/modules-load.d/k8s.conf || :
           modprobe nf-tables-bridge 2>/dev/null && echo nf-tables-bridge >> /etc/modules-load.d/k8s.conf || :
           modprobe br_netfilter 2>/dev/null && echo br_netfilter >> /etc/modules-load.d/k8s.conf || :
           echo 1 > /proc/sys/net/ipv4/ip_forward
-          dnf install -y iproute-tc containerd conntrack iptables
+          dnf -y install dnf-plugins-core
+          dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
+          dnf install -y iproute-tc docker-ce docker-ce-cli containerd.io docker-compose-plugin conntrack iptables
           ln -s /opt/cni/bin /usr/libexec/cni
           systemctl enable containerd
+          systemctl enable docker
           systemctl start containerd
+          systemctl start docker
           systemctl enable kubelet
-          grep -q control-plane /etc/hosts || echo '${k8s_master_ip}  control-plane.minikube.internal' >> /etc/hosts
           grep -q PATH= /etc/environment || {
               export PATH=\$PATH:/usr/local/bin
               echo PATH=\$PATH >> /etc/environment
@@ -339,7 +327,10 @@ EOF
           }
           mkdir -p /etc/kubernetes/manifests
           ctr -n k8s.io images import /tmp/spdkcsi.canary.image
-          ${kubeadm_join}
+          swapoff -a
+          rm /etc/containerd/config.toml
+          systemctl restart containerd
+          kubeadm init
           "
 }
 
@@ -391,6 +382,9 @@ function e2e-spdk-start() {
     sleep 5s
     # wait for spdk target ready
     sudo docker exec -i "${SPDK_CONTAINER}" timeout 5s /root/spdk/scripts/rpc.py framework_wait_init
+    # Create tcp transport
+    sudo docker exec -i "${SPDK_CONTAINER}" /root/spdk/scripts/rpc.py nvmf_create_transport -t tcp
+    sudo docker exec -i "${SPDK_CONTAINER}" /root/spdk/scripts/rpc.py nvmf_get_transports --trtype tcp
     # create 1G malloc bdev
     sudo docker exec -i "${SPDK_CONTAINER}" /root/spdk/scripts/rpc.py bdev_malloc_create -b Malloc0 1024 4096
     # create lvstore
