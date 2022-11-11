@@ -144,6 +144,7 @@ function e2e-vm-k8s-start() {
     # Download the cloud image if not already present
     [ -f "${fedora_qcow2}.clean" ] || ( curl -Lk https://fedora.mirrorservice.org/fedora/linux/releases/36/Cloud/x86_64/images/Fedora-Cloud-Base-36-1.5.x86_64.qcow2 > "${fedora_qcow2}.clean" )
     cp "${fedora_qcow2}.clean" "${fedora_qcow2}"
+    qemu-img resize "${fedora_qcow2}" +30G
 
     # Prepare cloud-init
     (
@@ -295,43 +296,71 @@ EOF
           $SCP "${host_bin}" $WORKER:/usr/local/bin
       done
     )
-    # Copy spdkcsi image so that spdkcsi node pod can use the already present image.
-    # (Will be imported to containerd image repository later when containerd is installed.)
-    ( set -x
-      docker image save spdkcsi/spdkcsi:canary | $K8WSSH "cat > /tmp/spdkcsi.canary.image"
-    )
+
     # Install packages, load modules, disable swap...
     $K8WSSH "set -e -x
-          modprobe bridge 2>/dev/null && echo bridge >> /etc/modules-load.d/k8s.conf || :
-          modprobe nf-tables-bridge 2>/dev/null && echo nf-tables-bridge >> /etc/modules-load.d/k8s.conf || :
-          modprobe br_netfilter 2>/dev/null && echo br_netfilter >> /etc/modules-load.d/k8s.conf || :
-          echo 1 > /proc/sys/net/ipv4/ip_forward
-          dnf -y install dnf-plugins-core
-          dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
-          dnf install -y iproute-tc docker-ce docker-ce-cli containerd.io docker-compose-plugin conntrack iptables
-          ln -s /opt/cni/bin /usr/libexec/cni
-          systemctl enable containerd
-          systemctl enable docker
-          systemctl start containerd
-          systemctl start docker
-          systemctl enable kubelet
-          grep -q PATH= /etc/environment || {
-              export PATH=\$PATH:/usr/local/bin
-              echo PATH=\$PATH >> /etc/environment
-          }
-          ( systemctl | iconv -f utf-8 -t ascii -c | awk '/swap/{print \$1}' | xargs -n 1 systemctl stop ) || :
-          ( systemctl | iconv -f utf-8 -t ascii -c | awk '/swap/{print \$1}' | xargs -n 1 systemctl disable ) || :
-          dnf remove -y zram-generator-defaults || :
-          [ -f /etc/kubernetes/kubelet.conf ] && {
-              yes | kubeadm reset
-          }
-          mkdir -p /etc/kubernetes/manifests
-          ctr -n k8s.io images import /tmp/spdkcsi.canary.image
-          swapoff -a
-          rm /etc/containerd/config.toml
-          systemctl restart containerd
-          kubeadm init
+            modprobe bridge 2>/dev/null && echo bridge >> /etc/modules-load.d/k8s.conf || :
+            modprobe nf-tables-bridge 2>/dev/null && echo nf-tables-bridge >> /etc/modules-load.d/k8s.conf || :
+            modprobe br_netfilter 2>/dev/null && echo br_netfilter >> /etc/modules-load.d/k8s.conf || :
+            echo 1 > /proc/sys/net/ipv4/ip_forward
+            dnf -y install dnf-plugins-core
+            dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
+            dnf install -y iproute-tc docker-ce docker-ce-cli containerd.io docker-compose-plugin conntrack iptables
+            ln -s /opt/cni/bin /usr/libexec/cni
+            systemctl enable containerd
+            systemctl enable docker
+            systemctl start containerd
+            systemctl start docker
+            systemctl enable kubelet
+            grep -q PATH= /etc/environment || {
+                export PATH=\$PATH:/usr/local/bin
+                echo PATH=\$PATH >> /etc/environment
+            }
+            ( systemctl | iconv -f utf-8 -t ascii -c | awk '/swap/{print \$1}' | xargs -n 1 systemctl stop ) || :
+            ( systemctl | iconv -f utf-8 -t ascii -c | awk '/swap/{print \$1}' | xargs -n 1 systemctl disable ) || :
+            dnf remove -y zram-generator-defaults || :
+            [ -f /etc/kubernetes/kubelet.conf ] && {
+                yes | kubeadm reset
+            }
+            mkdir -p /etc/kubernetes/manifests
           "
+
+    # Copy spdkcsi image so that spdkcsi node pod can use the already present image.
+    # (Will be imported to containerd image repository later when containerd is installed.)
+    declare -A ImageDict
+    ImageDict=( ['registry.k8s.io/kube-apiserver:v1.25.0']="kube-apiserver"
+                ['registry.k8s.io/kube-controller-manager:v1.25.0']="kube-controller-manager"
+                ['registry.k8s.io/kube-scheduler:v1.25.0']="kube-scheduler" 
+                ['registry.k8s.io/kube-proxy:v1.25.0']="kube-proxy"
+                ['registry.k8s.io/pause:3.8']="registry-pause"
+                ['registry.k8s.io/etcd:3.5.4-0']="etcd"
+                ['registry.k8s.io/coredns/coredns:v1.9.3']="coredns" 
+                ['k8s.gcr.io/pause:3.6']="k8s-pause"
+                ['k8s.gcr.io/sig-storage/csi-attacher:v3.0.0']="csi-attacher"
+                ['k8s.gcr.io/sig-storage/csi-node-driver-registrar:v2.0.1']="csi-node-driver-registrar"
+                ['k8s.gcr.io/sig-storage/csi-provisioner:v2.0.2']="csi-provisioner"
+                ['k8s.gcr.io/sig-storage/csi-snapshotter:v3.0.3']="csi-snapshotter"
+                ['k8s.gcr.io/sig-storage/snapshot-controller:v3.0.3']="snapshot-controller"
+                ['spdkcsi/spdkcsi:canary']="spdkcsi"
+                ['gcr.io/k8s-minikube/storage-provisioner:v5']="storage-provisioner"
+                ['fedora:33']="fedora"
+                ['alpine:3.8']="alpine" )
+    $K8WSSH mkdir -p /home/tmp
+    for image in "${!ImageDict[@]}"
+    do
+        echo "$image => ${ImageDict[$image]}"
+        ( set -x
+            docker image save $image | $K8WSSH "cat > /home/tmp/${ImageDict[$image]}.image"
+            $K8WSSH ctr -n k8s.io images import /home/tmp/${ImageDict[$image]}.image
+        )
+    done    
+    
+    $K8WSSH "set -e -x
+            swapoff -a
+            rm /etc/containerd/config.toml
+            systemctl restart containerd
+            kubeadm init
+            "
 }
 
 function e2e-k8s-worker-stop() {
