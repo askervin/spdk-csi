@@ -407,7 +407,8 @@ function e2e-spdk-start() {
     local docker_volumes="-v /sbin:/usr/local/sbin -v /lib/modules:/lib/modules"
     [ -d /bin/kmod ] && docker_volumes+=" -v /bin/kmod:/bin/kmod"
     # start spdk target
-    sudo docker run -id --name "${SPDK_CONTAINER}" --privileged --net host -v /dev/hugepages:/dev/hugepages -v /dev/shm:/dev/shm ${docker_volumes} ${SPDKIMAGE} sh -c "HUGEMEM=4096 /root/spdk/scripts/setup.sh; /root/spdk/build/bin/spdk_tgt"
+    sudo docker run -id --name "${SPDK_CONTAINER}" --privileged --net host -v /dev/hugepages:/dev/hugepages -v /var/tmp:/var/tmp -v /dev/shm:/dev/shm ${docker_volumes} ${SPDKIMAGE} 
+    sudo docker exec -i "${SPDK_CONTAINER}" sh -c "HUGEMEM=4096 /root/spdk/scripts/setup.sh; /root/spdk/build/bin/spdk_tgt &"
     sleep 5s
     # wait for spdk target ready
     sudo docker exec -i "${SPDK_CONTAINER}" timeout 5s /root/spdk/scripts/rpc.py framework_wait_init
@@ -421,14 +422,8 @@ function e2e-spdk-start() {
     # start jsonrpc http proxy
     sudo docker exec -id "${SPDK_CONTAINER}" /root/spdk/scripts/rpc_http_proxy.py ${JSONRPC_IP} ${JSONRPC_PORT} ${JSONRPC_USER} ${JSONRPC_PASS}
     echo "======== start sma server at ${SMA_ADDRESS}:${SMA_PORT} ========"
-    sudo docker exec -i "${SPDK_CONTAINER}" sed -e "s/port:.*/port: ${SMA_PORT}/g" -i /root/sma.yaml
-
-    # prepare the target
-    # sudo docker exec -i "${SPDK_CONTAINER}" /root/spdk/scripts/rpc.py bdev_null_create null0 100 4096
-    # create TCP transports
-    # sudo docker exec -i "${SPDK_CONTAINER}" timeout 5s /root/spdk/scripts/rpc.py nvmf_get_transports --trtype tcp
     # start sma server
-    sudo docker exec -d "${SPDK_CONTAINER}" sh -c "${SMA_SERVER} --config /root/sma.yaml >& /var/log/$(basename ${SMA_SERVER}).log"
+    sudo docker exec -d "${SPDK_CONTAINER}" sh -c "${SMA_SERVER} --address 127.0.0.1 --port ${SMA_PORT} --config /root/sma.yaml >& /var/log/$(basename ${SMA_SERVER}).log"
 
     sleep 1
     while ! nc -z "${SMA_ADDRESS}" "${SMA_PORT}"; do
