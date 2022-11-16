@@ -199,3 +199,21 @@ func execWithTimeout(cmdLine []string, timeout int) error {
 	}
 	return err
 }
+
+func execWithTimeoutWithOutput(cmdLine []string, timeout int) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+	defer cancel()
+
+	klog.Infof("running command: %v", cmdLine)
+	//nolint:gosec // execWithTimeout assumes valid cmd arguments
+	cmd := exec.CommandContext(ctx, cmdLine[0], cmdLine[1:]...)
+	output, err := cmd.CombinedOutput()
+
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return "", fmt.Errorf("timed out")
+	}
+	if output != nil {
+		klog.Infof("command returned: %s", output)
+	}
+	return string(output), err
+}

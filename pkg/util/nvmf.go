@@ -167,11 +167,11 @@ func (node *nodeNVMf) PublishVolume(lvolID string) error {
 		return err
 	}
 
-	lvol.nsID, err = node.subsystemAddNs(lvol.nqn, lvolID)
-	if err != nil {
-		node.deleteSubsystem(lvol.nqn) //nolint:errcheck // we can do few
-		return err
-	}
+	// lvol.nsID, err = node.subsystemAddNs(lvol.nqn, lvolID)
+	// if err != nil {
+	//	node.deleteSubsystem(lvol.nqn) //nolint:errcheck // we can do few
+	//	return err
+	// }
 
 	err = node.subsystemAddListener(lvol.nqn)
 	if err != nil {
@@ -198,13 +198,13 @@ func (node *nodeNVMf) UnpublishVolume(lvolID string) error {
 		return ErrVolumeUnpublished
 	}
 
-	err = node.subsystemRemoveNs(lvol.nqn, lvol.nsID)
-	if err != nil {
-		// we should try deleting subsystem even if we fail here
-		klog.Errorf("failed to remove namespace(nqn=%s, nsid=%d): %s", lvol.nqn, lvol.nsID, err)
-	} else {
-		lvol.nsID = invalidNSID
-	}
+	// err = node.subsystemRemoveNs(lvol.nqn, lvol.nsID)
+	// if err != nil {
+	// 	// we should try deleting subsystem even if we fail here
+	// 	klog.Errorf("failed to remove namespace(nqn=%s, nsid=%d): %s", lvol.nqn, lvol.nsID, err)
+	// } else {
+	// 	lvol.nsID = invalidNSID
+	// }
 
 	err = node.deleteSubsystem(lvol.nqn)
 	if err != nil {
