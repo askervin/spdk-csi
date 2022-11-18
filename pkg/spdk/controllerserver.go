@@ -197,7 +197,9 @@ func (cs *controllerServer) ValidateVolumeCapabilities(ctx context.Context, req 
 
 func (cs *controllerServer) ControllerGetVolume(ctx context.Context, req *csi.ControllerGetVolumeRequest) (*csi.ControllerGetVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
+	cs.mtx.Lock()
 	volume, exists := cs.volumes[volumeID]
+	cs.mtx.Unlock()
 	if !exists {
 		klog.Warningf("volume not exists: %s", volumeID)
 		return &csi.ControllerGetVolumeResponse{}, nil

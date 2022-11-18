@@ -106,6 +106,9 @@ func (sma *smaCommon) NewClient() smarpc.StorageManagementAgentClient {
 
 func (sma *smaCommon) SMAtovolUUID() []byte {
 	klog.Infof("DELME: sma.volumeContext-model is: %+v", sma.volumeContext["model"])
+	if sma.volumeContext["model"] == "" {
+		klog.Errorf("no volume available")
+	}
 	volUUID := uuid.MustParse(sma.volumeContext["model"])
 	volUUIDBytes, err := volUUID.MarshalBinary()
 	if err != nil {
@@ -122,6 +125,7 @@ func (sma *smaCommon) SMActx() (context.Context, context.CancelFunc) {
 func (sma *smaCommon) CreateDevice(req *smarpc.CreateDeviceRequest) string {
 	ctxTimeout, cancel := sma.SMActx()
 	defer cancel()
+
 	// Create device
 	response, err := sma.NewClient().CreateDevice(ctxTimeout, req)
 	if err != nil {
@@ -138,20 +142,16 @@ func (i *initiatorSmaNvme) Connect() (string, error) {
 		"lsblk", "-o", "NAME", "-n", "-i", "-r",
 	}
 	output, err := execWithTimeoutWithOutput(cmdLine, 40)
-	BeforeOutput := strings.Fields(output)
 	if err != nil {
-		// go on checking device status in case caused by duplicated request
-		klog.Errorf("command %v failed: %s", cmdLine, err)
-	} else {
-		klog.Infof("command succeed!")
+		return "", fmt.Errorf("command %v failed: %s", cmdLine, err)
 	}
+	BeforeOutput := strings.Fields(output)
 
 	ctxTimeout, cancel := i.sma.SMActx()
 	defer cancel()
 
 	// Create device
 	req := &smarpc.CreateDeviceRequest{
-		Volume: nil,
 		Params: &smarpc.CreateDeviceRequest_Nvme{
 			Nvme: &nvme.DeviceParameters{
 				PhysicalId: 0,
@@ -161,6 +161,9 @@ func (i *initiatorSmaNvme) Connect() (string, error) {
 	}
 
 	i.sma.deviceHandle = i.sma.CreateDevice(req)
+	if i.sma.deviceHandle == "" {
+		return "", fmt.Errorf("could not obtain the device handle after CreateDevice")
+	}
 	klog.Infof("DELME: i.sma.deviceHandle is: %+v", i.sma.deviceHandle)
 
 	// Attach volume
@@ -168,29 +171,23 @@ func (i *initiatorSmaNvme) Connect() (string, error) {
 		Volume:       &smarpc.VolumeParameters{VolumeId: i.sma.SMAtovolUUID()},
 		DeviceHandle: i.sma.deviceHandle,
 	}
-
 	attachRes, err := i.sma.NewClient().AttachVolume(ctxTimeout, attachReq)
 	if err != nil {
-		klog.Errorf("Attaching volume failed: %s", err)
-	} else {
-		klog.Infof("Attaching volume succeeded! %s", attachRes.ProtoReflect())
+		return "", fmt.Errorf("Attaching volume failed: %s", err)
 	}
-
-	time.Sleep(8 * time.Second)
+	klog.Infof("Attaching volume succeeded! %s", attachRes.ProtoReflect())
 
 	// Check all block devices after CreateDevice
+	time.Sleep(2 * time.Second)
 	output, err = execWithTimeoutWithOutput(cmdLine, 40)
-	AfterOutput := strings.Fields(output)
 	if err != nil {
-		// go on checking device status in case caused by duplicated request
-		klog.Errorf("command %v failed: %s", cmdLine, err)
-	} else {
-		klog.Infof("command succeed!")
+		return "", fmt.Errorf("command %v failed: %s", cmdLine, err)
 	}
+	AfterOutput := strings.Fields(output)
 
 	klog.Infof("DELME DIFF lsblk: %+v, %+v", BeforeOutput, AfterOutput)
 
-	// Check the device path
+	// Obtain the device path and return
 	if len(AfterOutput) == len(BeforeOutput)+1 {
 		deviceGlob := fmt.Sprintf("/dev/%s*", AfterOutput[len(AfterOutput)-1])
 		devicePath, err := waitForDeviceReady(deviceGlob, 20)
@@ -201,29 +198,27 @@ func (i *initiatorSmaNvme) Connect() (string, error) {
 		return devicePath, nil
 	}
 
-	return "", fmt.Errorf("could not find device path")
+	return "", fmt.Errorf("could not find the expected block device")
 }
 
 func (i *initiatorSmaNvme) Disconnect() error {
 	ctxTimeout, cancel := i.sma.SMActx()
 	defer cancel()
 
+	if i.sma.deviceHandle == "" {
+		return fmt.Errorf("could not obtain the device handle")
+	}
+
 	// Detach volume
 	detachReq := &smarpc.DetachVolumeRequest{
 		VolumeId:     i.sma.SMAtovolUUID(),
 		DeviceHandle: i.sma.deviceHandle,
 	}
-
 	detachRes, err := i.sma.NewClient().DetachVolume(ctxTimeout, detachReq)
 	if err != nil {
-		klog.Errorf("Detaching volume failed: %s", err)
-	} else {
-		klog.Infof("Detaching volume succeeded! %s", detachRes.ProtoReflect())
+		return fmt.Errorf("Detaching volume failed: %s", err)
 	}
-
-	// unmount the /dev/* device and wait for the device disappearing Delete device
-
-	time.Sleep(8 * time.Second)
+	klog.Infof("Detaching volume succeeded! %s", detachRes.ProtoReflect())
 	// deviceGlob := fmt.Sprintf("/dev/disk/by-id/*%s*", i.sma.volumeContext["model"])
 	// errwaitForDeviceGone := waitForDeviceGone(deviceGlob, 20)
 	// if errwaitForDeviceGone == nil {
@@ -233,12 +228,11 @@ func (i *initiatorSmaNvme) Disconnect() error {
 	}
 	deleteRes, err := i.sma.NewClient().DeleteDevice(ctxTimeout, deleteReq)
 	if err != nil {
-		klog.Errorf("Deleting subnqn failed: %s", err)
-	} else {
-		klog.Infof("Deleting subnqn succeeded! %s", deleteRes.ProtoReflect())
+		return fmt.Errorf("Deleting device failed: %s", err)
 	}
+	klog.Infof("Deleting device succeeded! %s", deleteRes.ProtoReflect())
 
-	return nil
+	return err
 }
 
 func (i *initiatorSmaVirtioBlk) Connect() (string, error) {
@@ -247,13 +241,10 @@ func (i *initiatorSmaVirtioBlk) Connect() (string, error) {
 		"lsblk", "-o", "NAME", "-n", "-i", "-r",
 	}
 	output, err := execWithTimeoutWithOutput(cmdLine, 40)
-	BeforeOutput := strings.Fields(output)
 	if err != nil {
-		// go on checking device status in case caused by duplicated request
-		klog.Errorf("command %v failed: %s", cmdLine, err)
-	} else {
-		klog.Infof("command succeed!")
+		return "", fmt.Errorf("command %v failed: %s", cmdLine, err)
 	}
+	BeforeOutput := strings.Fields(output)
 
 	// Create device
 	req := &smarpc.CreateDeviceRequest{
@@ -265,20 +256,20 @@ func (i *initiatorSmaVirtioBlk) Connect() (string, error) {
 			},
 		},
 	}
-	i.sma.deviceHandle = i.sma.CreateDevice(req)
-	klog.Infof("DELME: i.sma.deviceHandle is: %+v", i.sma.deviceHandle)
 
+	i.sma.deviceHandle = i.sma.CreateDevice(req)
+	if i.sma.deviceHandle == "" {
+		return "", fmt.Errorf("could not obtain the device handle after CreateDevice")
+	}
+	klog.Infof("DELME: i.sma.deviceHandle is: %+v", i.sma.deviceHandle)
 	time.Sleep(8 * time.Second)
 
 	// Check all block devices after CreateDevice
 	output, err = execWithTimeoutWithOutput(cmdLine, 40)
-	AfterOutput := strings.Fields(output)
 	if err != nil {
-		// go on checking device status in case caused by duplicated request
-		klog.Errorf("command %v failed: %s", cmdLine, err)
-	} else {
-		klog.Infof("command succeed!")
+		return "", fmt.Errorf("command %v failed: %s", cmdLine, err)
 	}
+	AfterOutput := strings.Fields(output)
 
 	klog.Infof("DELME DIFF lsblk: %+v, %+v", BeforeOutput, AfterOutput)
 
@@ -300,22 +291,25 @@ func (i *initiatorSmaVirtioBlk) Disconnect() error {
 	ctxTimeout, cancel := i.sma.SMActx()
 	defer cancel()
 
+	if i.sma.deviceHandle == "" {
+		return fmt.Errorf("could not obtain the device handle")
+	}
+
 	// Delete device
 	deleteReq := &smarpc.DeleteDeviceRequest{
 		Handle: i.sma.deviceHandle,
 	}
 	detachRes, err := i.sma.NewClient().DeleteDevice(ctxTimeout, deleteReq)
 	if err != nil {
-		klog.Errorf("Deleting subnqn failed: %s", err)
-	} else {
-		klog.Infof("Deleting subnqn succeeded! %s", detachRes.ProtoReflect())
+		return fmt.Errorf("Deleting device failed: %s", err)
 	}
+	klog.Infof("Deleting device succeeded! %s", detachRes.ProtoReflect())
 
 	// unmount the /dev/* device and wait for the device disappearing Delete device
 	// deviceGlob := fmt.Sprintf("/dev/vda")
 	// errwaitForDeviceGone := waitForDeviceGone(deviceGlob, 20)
 
-	return nil
+	return err
 }
 
 func (i *initiatorSmaNvmf) Connect() (string, error) {
@@ -379,8 +373,9 @@ func (i *initiatorSmaNvmf) Disconnect() error {
 	ctxTimeout, cancel := i.sma.SMActx()
 	defer cancel()
 
-	// deviceHandle := i.sma.SMACreateDevice()
-	// TODO: if i.sma.deviceHandle is empty...
+	if i.sma.deviceHandle == "" {
+		return fmt.Errorf("could not obtain the device handle")
+	}
 
 	// Detach volume
 	detachReq := &smarpc.DetachVolumeRequest{
@@ -416,10 +411,11 @@ func (i *initiatorSmaNvmf) Disconnect() error {
 		}
 		detachRes, err := i.sma.NewClient().DeleteDevice(ctxTimeout, deleteReq)
 		if err != nil {
-			klog.Errorf("Deleting subnqn failed: %s", err)
+			klog.Errorf("Deleting device failed: %s", err)
 		} else {
-			klog.Infof("Deleting subnqn succeeded! %s", detachRes.ProtoReflect())
+			klog.Infof("Deleting device succeeded! %s", detachRes.ProtoReflect())
 		}
+		return err
 	}
 	return errwaitForDeviceGone
 }
