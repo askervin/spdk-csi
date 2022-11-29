@@ -345,50 +345,66 @@ func (i *initiatorSmaNvmf) Connect() (string, error) {
 	ctxTimeout, cancel := i.sma.SMActx()
 	defer cancel()
 
-	// Create device
+	// CreateDevice for NvmfTcp
 	req := &smarpc.CreateDeviceRequest{
 		Volume: nil,
 		Params: &smarpc.CreateDeviceRequest_NvmfTcp{
 			NvmfTcp: &nvmf_tcp.DeviceParameters{
-				Subnqn:  i.sma.volumeContext["nqn"],
-				Adrfam:  cfgAddrFamily,
-				Traddr:  i.sma.volumeContext["targetAddr"],
-				Trsvcid: i.sma.volumeContext["targetPort"],
+				Subnqn:       "nqn.2022-04.io.spdk.csi:cnode0",
+				Adrfam:       "ipv4",
+				Traddr:       "127.0.0.1",
+				Trsvcid:      "4421",
+				AllowAnyHost: true,
 			},
 		},
 	}
-	klog.Infof("i.sma.volumeContext-nqn is %s", i.sma.volumeContext["nqn"])
-	klog.Infof("req.GetNvmfTcp().Subnqn is %s", req.GetNvmfTcp().Subnqn)
 	i.sma.deviceHandle = i.sma.CreateDevice(req)
-	i.subnqn = req.GetNvmfTcp().Subnqn
+	// i.subnqn = req.GetNvmfTcp().Subnqn
 
-	// Connect to device
-	// Todo: Change the 127.0.0.1 with the address from volume context
-	cmdLine := []string{
-		"nvme", "connect", "-t", i.sma.volumeContext["targetType"], "-a", i.sma.volumeContext["targetAddr"], "-s", i.sma.volumeContext["targetPort"], "-n", i.sma.volumeContext["nqn"],
-	}
-	err := execWithTimeout(cmdLine, 40)
-	if err != nil {
-		// go on checking device status in case caused by duplicated request
-		klog.Errorf("command %v failed: %s", cmdLine, err)
-	} else {
-		klog.Infof("nvme connect succeeded!")
-	}
-
-	// Attach volume
+	// AttachVolume for NvmfTcp
 	attachReq := &smarpc.AttachVolumeRequest{
-		Volume:       &smarpc.VolumeParameters{VolumeId: i.sma.SMAtovolUUID()},
+		Volume: &smarpc.VolumeParameters{
+			VolumeId: i.sma.SMAtovolUUID(),
+			ConnectionParams: &smarpc.VolumeParameters_Nvmf{
+				Nvmf: &nvmf.VolumeConnectionParameters{
+					Subnqn:  "",
+					Hostnqn: i.sma.volumeContext["nqn"],
+					ConnectionParams: &nvmf.VolumeConnectionParameters_Discovery{
+						Discovery: &nvmf.VolumeDiscoveryParameters{
+							DiscoveryEndpoints: []*nvmf.Address{
+								{
+									Trtype:  i.sma.volumeContext["targetType"],
+									Traddr:  i.sma.volumeContext["targetAddr"],
+									Trsvcid: i.sma.volumeContext["targetPort"],
+								},
+							},
+						},
+					},
+				},
+			},
+		},
 		DeviceHandle: i.sma.deviceHandle,
 	}
 
 	attachRes, err := i.sma.NewClient().AttachVolume(ctxTimeout, attachReq)
 	if err != nil {
-		klog.Errorf("DELME: SMA.AttachVolume failed: %s", err)
+		klog.Errorf("DELME: SMA.AttachVolume failed: %+v, %s", attachRes, err)
 	} else {
-		klog.Infof("DELME: SMA.AttachVolume succeeded! %s", attachRes.ProtoReflect())
+		klog.Infof("DELME: SMA.AttachVolume succeeded!")
 	}
 
-	// Check the device path
+	// Connect to the block device for NvmfTcp
+	cmdLine := []string{
+		"nvme", "connect", "-t", "tcp", "-a", "127.0.0.1", "-s", "4421", "-n", "nqn.2022-04.io.spdk.csi:cnode0",
+	}
+	err = execWithTimeout(cmdLine, 40)
+	if err != nil {
+		klog.Errorf("command %v failed: %s", cmdLine, err)
+	} else {
+		klog.Infof("nvme connect succeeded!")
+	}
+
+	// Obtain the path of the block device for NvmfTcp
 	deviceGlob := fmt.Sprintf("/dev/disk/by-id/*%s*", i.sma.volumeContext["model"])
 	devicePath, err := waitForDeviceReady(deviceGlob, 20)
 	if err != nil {
@@ -407,7 +423,18 @@ func (i *initiatorSmaNvmf) Disconnect() error {
 		return fmt.Errorf("could not obtain the device handle")
 	}
 
-	// Detach volume
+	// Disconnect the block device for NvmfTcp
+	cmdLine := []string{
+		"nvme", "disconnect", "-n", "nqn.2022-04.io.spdk.csi:cnode0",
+	}
+	err := execWithTimeout(cmdLine, 40)
+	if err != nil {
+		klog.Errorf("command %v failed: %s", cmdLine, err)
+	} else {
+		klog.Infof("nvme disconnect succeeded!")
+	}
+
+	// DetachVolume for NvmfTcp
 	detachReq := &smarpc.DetachVolumeRequest{
 		VolumeId:     i.sma.SMAtovolUUID(),
 		DeviceHandle: i.sma.deviceHandle,
@@ -415,35 +442,23 @@ func (i *initiatorSmaNvmf) Disconnect() error {
 
 	detachRes, err := i.sma.NewClient().DetachVolume(ctxTimeout, detachReq)
 	if err != nil {
-		klog.Errorf("DELME: SMA.DetachVolume failed: %s", err)
+		klog.Errorf("DELME: SMA.DetachVolume failed: %+v, %s", detachRes, err)
 	} else {
-		klog.Infof("DELME: SMA.DetachVolume succeeded! %s", detachRes.ProtoReflect())
+		klog.Infof("DELME: SMA.DetachVolume succeeded!")
 	}
 
-	// Disconnect device
-	cmdLine := []string{
-		"nvme", "disconnect", "-n", i.subnqn,
-	}
-	err = execWithTimeout(cmdLine, 40)
-	if err != nil {
-		// go on checking device status in case caused by duplicated request
-		klog.Errorf("command %v failed: %s", cmdLine, err)
-	} else {
-		klog.Infof("nvme disconnect succeeded!")
-	}
-
-	// Delete device
+	// DeleteDevice for NvmfTcp
 	deviceGlob := fmt.Sprintf("/dev/disk/by-id/*%s*", i.sma.volumeContext["model"])
 	errwaitForDeviceGone := waitForDeviceGone(deviceGlob, 20)
 	if errwaitForDeviceGone == nil {
 		deleteReq := &smarpc.DeleteDeviceRequest{
 			Handle: i.sma.deviceHandle,
 		}
-		detachRes, err := i.sma.NewClient().DeleteDevice(ctxTimeout, deleteReq)
+		deleteRes, err := i.sma.NewClient().DeleteDevice(ctxTimeout, deleteReq)
 		if err != nil {
-			klog.Errorf("DELME: SMA.DeleteDevice failed: %s", err)
+			klog.Errorf("DELME: SMA.DeleteDevice failed: %+v, %s", deleteRes, err)
 		} else {
-			klog.Infof("DELME: SMA.DeleteDevice succeeded! %s", detachRes.ProtoReflect())
+			klog.Infof("DELME: SMA.DeleteDevice succeeded!")
 		}
 		return err
 	}
