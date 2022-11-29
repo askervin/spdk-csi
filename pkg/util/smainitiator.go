@@ -25,10 +25,7 @@ import (
 
 	"k8s.io/klog"
 
-	// grpc stuff
-
 	"github.com/google/uuid"
-	"github.com/kubernetes-csi/csi-lib-utils/protosanitizer"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -105,7 +102,6 @@ func (sma *smaCommon) NewClient() smarpc.StorageManagementAgentClient {
 }
 
 func (sma *smaCommon) SMAtovolUUID() []byte {
-	klog.Infof("DELME: sma.volumeContext-model is: %+v", sma.volumeContext["model"])
 	if sma.volumeContext["model"] == "" {
 		klog.Errorf("no volume available")
 	}
@@ -118,7 +114,7 @@ func (sma *smaCommon) SMAtovolUUID() []byte {
 }
 
 func (sma *smaCommon) SMActx() (context.Context, context.CancelFunc) {
-	ctxTimeout, cancel := context.WithTimeout(context.Background(), 100*time.Second)
+	ctxTimeout, cancel := context.WithTimeout(context.Background(), 42*time.Second)
 	return ctxTimeout, cancel
 }
 
@@ -126,7 +122,7 @@ func (sma *smaCommon) CreateDevice(req *smarpc.CreateDeviceRequest) string {
 	ctxTimeout, cancel := sma.SMActx()
 	defer cancel()
 
-	// Create device
+	// New SMA client and do CreateDevice
 	response, err := sma.NewClient().CreateDevice(ctxTimeout, req)
 	if err != nil {
 		klog.Errorf("DELME: SMA.CreateDevice failed: %s", err)
@@ -141,7 +137,7 @@ func (sma *smaCommon) CreateDevice(req *smarpc.CreateDeviceRequest) string {
 }
 
 func (i *initiatorSmaNvme) Connect() (string, error) {
-	// Check all block devices before CreateDevice
+	// List all block devices before CreateDevice/AttachVolume for Nvme
 	cmdLine := []string{
 		"lsblk", "-o", "NAME", "-n", "-i", "-r",
 	}
@@ -154,7 +150,7 @@ func (i *initiatorSmaNvme) Connect() (string, error) {
 	ctxTimeout, cancel := i.sma.SMActx()
 	defer cancel()
 
-	// Create device
+	// CreateDevice for Nvme
 	req := &smarpc.CreateDeviceRequest{
 		Params: &smarpc.CreateDeviceRequest_Nvme{
 			Nvme: &nvme.DeviceParameters{
@@ -170,22 +166,38 @@ func (i *initiatorSmaNvme) Connect() (string, error) {
 	}
 	klog.Infof("DELME: i.sma.deviceHandle is: %+v", i.sma.deviceHandle)
 
-	// Attach volume
+	// AttachVolume for Nvme
 	attachReq := &smarpc.AttachVolumeRequest{
 		Volume: &smarpc.VolumeParameters{
-			VolumeId:         i.sma.SMAtovolUUID(),
-			ConnectionParams: &smarpc.VolumeParameters_Nvmf{Nvmf: &nvmf.VolumeConnectionParameters{Subnqn: "", Hostnqn: i.sma.volumeContext["nqn"], ConnectionParams: &nvmf.VolumeConnectionParameters_Discovery{Discovery: &nvmf.VolumeDiscoveryParameters{DiscoveryEndpoints: []*nvmf.Address{{Trtype: i.sma.volumeContext["targetType"], Traddr: i.sma.volumeContext["targetAddr"], Trsvcid: i.sma.volumeContext["targetPort"]}}}}}},
+			VolumeId: i.sma.SMAtovolUUID(),
+			ConnectionParams: &smarpc.VolumeParameters_Nvmf{
+				Nvmf: &nvmf.VolumeConnectionParameters{
+					Subnqn:  "",
+					Hostnqn: i.sma.volumeContext["nqn"],
+					ConnectionParams: &nvmf.VolumeConnectionParameters_Discovery{
+						Discovery: &nvmf.VolumeDiscoveryParameters{
+							DiscoveryEndpoints: []*nvmf.Address{
+								{
+									Trtype:  i.sma.volumeContext["targetType"],
+									Traddr:  i.sma.volumeContext["targetAddr"],
+									Trsvcid: i.sma.volumeContext["targetPort"],
+								},
+							},
+						},
+					},
+				},
+			},
 		},
 		DeviceHandle: i.sma.deviceHandle,
 	}
-	klog.Infof("DELME: sending AttachVolumeRequest request: %+v", protosanitizer.StripSecrets(attachReq))
+
 	attachRes, err := i.sma.NewClient().AttachVolume(ctxTimeout, attachReq)
 	if err != nil {
-		return "", fmt.Errorf("DELME: SMA.AttachVolume failed: %s", err)
+		return "", fmt.Errorf("DELME: SMA.AttachVolume failed: %+v, %s", attachRes, err)
 	}
-	klog.Infof("DELME: SMA.AttachVolume succeeded! %s", attachRes.ProtoReflect())
+	klog.Infof("DELME: SMA.AttachVolume succeeded!")
 
-	// Check all block devices after CreateDevice
+	// List all block devices after CreateDevice/AttachVolume for Nvme
 	time.Sleep(2 * time.Second)
 	output, err = execWithTimeoutWithOutput(cmdLine, 40)
 	if err != nil {
@@ -193,9 +205,7 @@ func (i *initiatorSmaNvme) Connect() (string, error) {
 	}
 	AfterOutput := strings.Fields(output)
 
-	klog.Infof("DELME DIFF lsblk: %+v, %+v", BeforeOutput, AfterOutput)
-
-	// Obtain the device path and return
+	// Compare block device list before and after CreateDevice/AttachVolume for Nvme and obtain device path
 	if len(AfterOutput) == len(BeforeOutput)+1 {
 		deviceGlob := fmt.Sprintf("/dev/%s*", AfterOutput[len(AfterOutput)-1])
 		devicePath, err := waitForDeviceReady(deviceGlob, 20)
@@ -217,34 +227,32 @@ func (i *initiatorSmaNvme) Disconnect() error {
 		return fmt.Errorf("could not obtain the device handle")
 	}
 
-	// Detach volume
+	// DetachVolume for Nvme
 	detachReq := &smarpc.DetachVolumeRequest{
 		VolumeId:     i.sma.SMAtovolUUID(),
 		DeviceHandle: i.sma.deviceHandle,
 	}
 	detachRes, err := i.sma.NewClient().DetachVolume(ctxTimeout, detachReq)
 	if err != nil {
-		return fmt.Errorf("DELME: SMA.DetachVolume failed: %s", err)
+		return fmt.Errorf("DELME: SMA.DetachVolume failed: %+v, %s", detachRes, err)
 	}
-	klog.Infof("DELME: SMA.DetachVolume succeeded! %s", detachRes.ProtoReflect())
-	// deviceGlob := fmt.Sprintf("/dev/disk/by-id/*%s*", i.sma.volumeContext["model"])
-	// errwaitForDeviceGone := waitForDeviceGone(deviceGlob, 20)
-	// if errwaitForDeviceGone == nil {
+	klog.Infof("DELME: SMA.DetachVolume succeeded!")
 
+	// DeleteDevice for Nvme
 	deleteReq := &smarpc.DeleteDeviceRequest{
 		Handle: i.sma.deviceHandle,
 	}
 	deleteRes, err := i.sma.NewClient().DeleteDevice(ctxTimeout, deleteReq)
 	if err != nil {
-		return fmt.Errorf("DELME: SMA.DeleteDevice failed: %s", err)
+		return fmt.Errorf("DELME: SMA.DeleteDevice failed: %+v, %s", deleteRes, err)
 	}
-	klog.Infof("DELME: SMA.DeleteDevice succeeded! %s", deleteRes.ProtoReflect())
+	klog.Infof("DELME: SMA.DeleteDevice succeeded!")
 
 	return err
 }
 
 func (i *initiatorSmaVirtioBlk) Connect() (string, error) {
-	// Check all block devices before CreateDevice
+	// List all block devices before CreateDevice for VirtioBlk
 	cmdLine := []string{
 		"lsblk", "-o", "NAME", "-n", "-i", "-r",
 	}
@@ -254,11 +262,27 @@ func (i *initiatorSmaVirtioBlk) Connect() (string, error) {
 	}
 	BeforeOutput := strings.Fields(output)
 
-	// Create device
+	// CreateDevice for VirtioBlk
 	req := &smarpc.CreateDeviceRequest{
 		Volume: &smarpc.VolumeParameters{
-			VolumeId:         i.sma.SMAtovolUUID(),
-			ConnectionParams: &smarpc.VolumeParameters_Nvmf{Nvmf: &nvmf.VolumeConnectionParameters{Subnqn: "", Hostnqn: i.sma.volumeContext["nqn"], ConnectionParams: &nvmf.VolumeConnectionParameters_Discovery{Discovery: &nvmf.VolumeDiscoveryParameters{DiscoveryEndpoints: []*nvmf.Address{{Trtype: i.sma.volumeContext["targetType"], Traddr: i.sma.volumeContext["targetAddr"], Trsvcid: i.sma.volumeContext["targetPort"]}}}}}},
+			VolumeId: i.sma.SMAtovolUUID(),
+			ConnectionParams: &smarpc.VolumeParameters_Nvmf{
+				Nvmf: &nvmf.VolumeConnectionParameters{
+					Subnqn:  "",
+					Hostnqn: i.sma.volumeContext["nqn"],
+					ConnectionParams: &nvmf.VolumeConnectionParameters_Discovery{
+						Discovery: &nvmf.VolumeDiscoveryParameters{
+							DiscoveryEndpoints: []*nvmf.Address{
+								{
+									Trtype:  i.sma.volumeContext["targetType"],
+									Traddr:  i.sma.volumeContext["targetAddr"],
+									Trsvcid: i.sma.volumeContext["targetPort"],
+								},
+							},
+						},
+					},
+				},
+			},
 		},
 		Params: &smarpc.CreateDeviceRequest_VirtioBlk{
 			VirtioBlk: &virtio_blk.DeviceParameters{
@@ -272,19 +296,17 @@ func (i *initiatorSmaVirtioBlk) Connect() (string, error) {
 	if i.sma.deviceHandle == "" {
 		return "", fmt.Errorf("could not obtain the device handle after CreateDevice")
 	}
-	klog.Infof("DELME: i.sma.deviceHandle is: %+v", i.sma.deviceHandle)
+	klog.Infof("DELME: i.sma.deviceHandle is: %s", i.sma.deviceHandle)
 	time.Sleep(8 * time.Second)
 
-	// Check all block devices after CreateDevice
+	// List all block devices after CreateDevice for VirtioBlk
 	output, err = execWithTimeoutWithOutput(cmdLine, 40)
 	if err != nil {
 		return "", fmt.Errorf("command %v failed: %s", cmdLine, err)
 	}
 	AfterOutput := strings.Fields(output)
 
-	klog.Infof("DELME DIFF lsblk: %+v, %+v", BeforeOutput, AfterOutput)
-
-	// Check the device path
+	// Compare block device list before and after CreateDevice for VirtioBlk and obtain device path
 	if len(AfterOutput) == len(BeforeOutput)+1 {
 		deviceGlob := fmt.Sprintf("/dev/%s*", AfterOutput[len(AfterOutput)-1])
 		devicePath, err := waitForDeviceReady(deviceGlob, 20)
@@ -306,19 +328,15 @@ func (i *initiatorSmaVirtioBlk) Disconnect() error {
 		return fmt.Errorf("could not obtain the device handle")
 	}
 
-	// Delete device
+	// DeleteDevice for VirtioBlk
 	deleteReq := &smarpc.DeleteDeviceRequest{
 		Handle: i.sma.deviceHandle,
 	}
 	detachRes, err := i.sma.NewClient().DeleteDevice(ctxTimeout, deleteReq)
 	if err != nil {
-		return fmt.Errorf("DELME: SMA.DeleteDevice failed: %s", err)
+		return fmt.Errorf("DELME: SMA.DeleteDevice failed: %+v, %s", detachRes, err)
 	}
-	klog.Infof("DELME: SMA.DeleteDevice succeeded! %s", detachRes.ProtoReflect())
-
-	// unmount the /dev/* device and wait for the device disappearing Delete device
-	// deviceGlob := fmt.Sprintf("/dev/vda")
-	// errwaitForDeviceGone := waitForDeviceGone(deviceGlob, 20)
+	klog.Infof("DELME: SMA.DeleteDevice succeeded!")
 
 	return err
 }
