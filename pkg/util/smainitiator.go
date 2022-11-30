@@ -52,6 +52,7 @@ func NewSpdkCsiSmaInitiator(volumeContext map[string]string) (SpdkCsiInitiator, 
 	iSmaCommon := &smaCommon{
 		volumeContext: volumeContext,
 		serverURL:     smaConfig.Server,
+		timeout:       60 * time.Second,
 	}
 	switch smaConfig.ClassConfig.Type {
 	case "NvmfTcp":
@@ -67,9 +68,10 @@ func NewSpdkCsiSmaInitiator(volumeContext map[string]string) (SpdkCsiInitiator, 
 }
 
 type smaCommon struct {
-	serverURL     string
+	serverURL     string // SMA GRPC server
 	deviceHandle  string // non-empty when connected
 	volumeContext map[string]string
+	timeout       time.Duration
 }
 
 type initiatorSmaNvmf struct {
@@ -101,7 +103,7 @@ func (sma *smaCommon) NewClient() smarpc.StorageManagementAgentClient {
 	return client
 }
 
-func (sma *smaCommon) SMAtovolUUID() []byte {
+func (sma *smaCommon) volumeUUID() []byte {
 	if sma.volumeContext["model"] == "" {
 		klog.Errorf("no volume available")
 	}
@@ -113,13 +115,34 @@ func (sma *smaCommon) SMAtovolUUID() []byte {
 	return volUUIDBytes
 }
 
-func (sma *smaCommon) SMActx() (context.Context, context.CancelFunc) {
-	ctxTimeout, cancel := context.WithTimeout(context.Background(), 42*time.Second)
+func (sma *smaCommon) ctxTimeout() (context.Context, context.CancelFunc) {
+	ctxTimeout, cancel := context.WithTimeout(context.Background(), sma.timeout)
 	return ctxTimeout, cancel
 }
 
+func (sma *smaCommon) nvmfVolumeParameters() *smarpc.VolumeParameters_Nvmf {
+	vcp := &smarpc.VolumeParameters_Nvmf{
+		Nvmf: &nvmf.VolumeConnectionParameters{
+			Subnqn:  "",
+			Hostnqn: sma.volumeContext["nqn"],
+			ConnectionParams: &nvmf.VolumeConnectionParameters_Discovery{
+				Discovery: &nvmf.VolumeDiscoveryParameters{
+					DiscoveryEndpoints: []*nvmf.Address{
+						{
+							Trtype:  sma.volumeContext["targetType"],
+							Traddr:  sma.volumeContext["targetAddr"],
+							Trsvcid: sma.volumeContext["targetPort"],
+						},
+					},
+				},
+			},
+		},
+	}
+	return vcp
+}
+
 func (sma *smaCommon) CreateDevice(req *smarpc.CreateDeviceRequest) string {
-	ctxTimeout, cancel := sma.SMActx()
+	ctxTimeout, cancel := sma.ctxTimeout()
 	defer cancel()
 
 	// New SMA client and do CreateDevice
@@ -147,7 +170,7 @@ func (i *initiatorSmaNvme) Connect() (string, error) {
 	}
 	BeforeOutput := strings.Fields(output)
 
-	ctxTimeout, cancel := i.sma.SMActx()
+	ctxTimeout, cancel := i.sma.ctxTimeout()
 	defer cancel()
 
 	// CreateDevice for Nvme
@@ -169,24 +192,8 @@ func (i *initiatorSmaNvme) Connect() (string, error) {
 	// AttachVolume for Nvme
 	attachReq := &smarpc.AttachVolumeRequest{
 		Volume: &smarpc.VolumeParameters{
-			VolumeId: i.sma.SMAtovolUUID(),
-			ConnectionParams: &smarpc.VolumeParameters_Nvmf{
-				Nvmf: &nvmf.VolumeConnectionParameters{
-					Subnqn:  "",
-					Hostnqn: i.sma.volumeContext["nqn"],
-					ConnectionParams: &nvmf.VolumeConnectionParameters_Discovery{
-						Discovery: &nvmf.VolumeDiscoveryParameters{
-							DiscoveryEndpoints: []*nvmf.Address{
-								{
-									Trtype:  i.sma.volumeContext["targetType"],
-									Traddr:  i.sma.volumeContext["targetAddr"],
-									Trsvcid: i.sma.volumeContext["targetPort"],
-								},
-							},
-						},
-					},
-				},
-			},
+			VolumeId:         i.sma.volumeUUID(),
+			ConnectionParams: i.sma.nvmfVolumeParameters(),
 		},
 		DeviceHandle: i.sma.deviceHandle,
 	}
@@ -220,7 +227,7 @@ func (i *initiatorSmaNvme) Connect() (string, error) {
 }
 
 func (i *initiatorSmaNvme) Disconnect() error {
-	ctxTimeout, cancel := i.sma.SMActx()
+	ctxTimeout, cancel := i.sma.ctxTimeout()
 	defer cancel()
 
 	if i.sma.deviceHandle == "" {
@@ -229,7 +236,7 @@ func (i *initiatorSmaNvme) Disconnect() error {
 
 	// DetachVolume for Nvme
 	detachReq := &smarpc.DetachVolumeRequest{
-		VolumeId:     i.sma.SMAtovolUUID(),
+		VolumeId:     i.sma.volumeUUID(),
 		DeviceHandle: i.sma.deviceHandle,
 	}
 	detachRes, err := i.sma.NewClient().DetachVolume(ctxTimeout, detachReq)
@@ -265,24 +272,8 @@ func (i *initiatorSmaVirtioBlk) Connect() (string, error) {
 	// CreateDevice for VirtioBlk
 	req := &smarpc.CreateDeviceRequest{
 		Volume: &smarpc.VolumeParameters{
-			VolumeId: i.sma.SMAtovolUUID(),
-			ConnectionParams: &smarpc.VolumeParameters_Nvmf{
-				Nvmf: &nvmf.VolumeConnectionParameters{
-					Subnqn:  "",
-					Hostnqn: i.sma.volumeContext["nqn"],
-					ConnectionParams: &nvmf.VolumeConnectionParameters_Discovery{
-						Discovery: &nvmf.VolumeDiscoveryParameters{
-							DiscoveryEndpoints: []*nvmf.Address{
-								{
-									Trtype:  i.sma.volumeContext["targetType"],
-									Traddr:  i.sma.volumeContext["targetAddr"],
-									Trsvcid: i.sma.volumeContext["targetPort"],
-								},
-							},
-						},
-					},
-				},
-			},
+			VolumeId:         i.sma.volumeUUID(),
+			ConnectionParams: i.sma.nvmfVolumeParameters(),
 		},
 		Params: &smarpc.CreateDeviceRequest_VirtioBlk{
 			VirtioBlk: &virtio_blk.DeviceParameters{
@@ -321,7 +312,7 @@ func (i *initiatorSmaVirtioBlk) Connect() (string, error) {
 }
 
 func (i *initiatorSmaVirtioBlk) Disconnect() error {
-	ctxTimeout, cancel := i.sma.SMActx()
+	ctxTimeout, cancel := i.sma.ctxTimeout()
 	defer cancel()
 
 	if i.sma.deviceHandle == "" {
@@ -342,7 +333,7 @@ func (i *initiatorSmaVirtioBlk) Disconnect() error {
 }
 
 func (i *initiatorSmaNvmf) Connect() (string, error) {
-	ctxTimeout, cancel := i.sma.SMActx()
+	ctxTimeout, cancel := i.sma.ctxTimeout()
 	defer cancel()
 
 	// CreateDevice for NvmfTcp
@@ -364,24 +355,8 @@ func (i *initiatorSmaNvmf) Connect() (string, error) {
 	// AttachVolume for NvmfTcp
 	attachReq := &smarpc.AttachVolumeRequest{
 		Volume: &smarpc.VolumeParameters{
-			VolumeId: i.sma.SMAtovolUUID(),
-			ConnectionParams: &smarpc.VolumeParameters_Nvmf{
-				Nvmf: &nvmf.VolumeConnectionParameters{
-					Subnqn:  "",
-					Hostnqn: i.sma.volumeContext["nqn"],
-					ConnectionParams: &nvmf.VolumeConnectionParameters_Discovery{
-						Discovery: &nvmf.VolumeDiscoveryParameters{
-							DiscoveryEndpoints: []*nvmf.Address{
-								{
-									Trtype:  i.sma.volumeContext["targetType"],
-									Traddr:  i.sma.volumeContext["targetAddr"],
-									Trsvcid: i.sma.volumeContext["targetPort"],
-								},
-							},
-						},
-					},
-				},
-			},
+			VolumeId:         i.sma.volumeUUID(),
+			ConnectionParams: i.sma.nvmfVolumeParameters(),
 		},
 		DeviceHandle: i.sma.deviceHandle,
 	}
@@ -416,7 +391,7 @@ func (i *initiatorSmaNvmf) Connect() (string, error) {
 }
 
 func (i *initiatorSmaNvmf) Disconnect() error {
-	ctxTimeout, cancel := i.sma.SMActx()
+	ctxTimeout, cancel := i.sma.ctxTimeout()
 	defer cancel()
 
 	if i.sma.deviceHandle == "" {
@@ -436,7 +411,7 @@ func (i *initiatorSmaNvmf) Disconnect() error {
 
 	// DetachVolume for NvmfTcp
 	detachReq := &smarpc.DetachVolumeRequest{
-		VolumeId:     i.sma.SMAtovolUUID(),
+		VolumeId:     i.sma.volumeUUID(),
 		DeviceHandle: i.sma.deviceHandle,
 	}
 
