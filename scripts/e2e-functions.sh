@@ -330,11 +330,11 @@ EOF
     declare -A ImageDict
     ImageDict=( ['registry.k8s.io/kube-apiserver:v1.25.0']="kube-apiserver"
                 ['registry.k8s.io/kube-controller-manager:v1.25.0']="kube-controller-manager"
-                ['registry.k8s.io/kube-scheduler:v1.25.0']="kube-scheduler" 
+                ['registry.k8s.io/kube-scheduler:v1.25.0']="kube-scheduler"
                 ['registry.k8s.io/kube-proxy:v1.25.0']="kube-proxy"
                 ['registry.k8s.io/pause:3.8']="registry-pause"
                 ['registry.k8s.io/etcd:3.5.4-0']="etcd"
-                ['registry.k8s.io/coredns/coredns:v1.9.3']="coredns" 
+                ['registry.k8s.io/coredns/coredns:v1.9.3']="coredns"
                 ['k8s.gcr.io/pause:3.6']="k8s-pause"
                 ['k8s.gcr.io/sig-storage/csi-attacher:v3.0.0']="csi-attacher"
                 ['k8s.gcr.io/sig-storage/csi-node-driver-registrar:v2.0.1']="csi-node-driver-registrar"
@@ -353,8 +353,8 @@ EOF
             docker image save $image | $K8WSSH "cat > /home/tmp/${ImageDict[$image]}.image"
             $K8WSSH ctr -n k8s.io images import /home/tmp/${ImageDict[$image]}.image
         )
-    done    
-    
+    done
+
     $K8WSSH "set -e -x
             swapoff -a
             rm /etc/containerd/config.toml
@@ -407,7 +407,7 @@ function e2e-spdk-start() {
     local docker_volumes="-v /sbin:/usr/local/sbin -v /lib/modules:/lib/modules"
     [ -d /bin/kmod ] && docker_volumes+=" -v /bin/kmod:/bin/kmod"
     # start spdk target
-    sudo docker run -id --name "${SPDK_CONTAINER}" --privileged --net host -v /dev/hugepages:/dev/hugepages -v /var/tmp:/var/tmp -v /dev/shm:/dev/shm ${docker_volumes} ${SPDKIMAGE} 
+    sudo docker run -id --name "${SPDK_CONTAINER}" --privileged --net host -v /dev/hugepages:/dev/hugepages -v /dev/shm:/dev/shm ${docker_volumes} ${SPDKIMAGE}
     sudo docker exec -i "${SPDK_CONTAINER}" sh -c "HUGEMEM=4096 /root/spdk/scripts/setup.sh; /root/spdk/build/bin/spdk_tgt &"
     sleep 5s
     # wait for spdk target ready
@@ -421,9 +421,15 @@ function e2e-spdk-start() {
     sudo docker exec -i "${SPDK_CONTAINER}" /root/spdk/scripts/rpc.py bdev_lvol_create_lvstore Malloc0 lvs0
     # start jsonrpc http proxy
     sudo docker exec -id "${SPDK_CONTAINER}" /root/spdk/scripts/rpc_http_proxy.py ${JSONRPC_IP} ${JSONRPC_PORT} ${JSONRPC_USER} ${JSONRPC_PASS}
+}
+
+function e2e-spdk-start2() {
     echo "======== start sma server at ${SMA_ADDRESS}:${SMA_PORT} ========"
     # start sma server
-    sudo docker exec -d "${SPDK_CONTAINER}" sh -c "${SMA_SERVER} --address 127.0.0.1 --port ${SMA_PORT} --config /root/sma.yaml >& /var/log/$(basename ${SMA_SERVER}).log"
+    export SPDK_CONTAINER_2=${SPDK_CONTAINER}2
+    sudo docker run -id --name "${SPDK_CONTAINER_2}" --privileged --net host -v /dev/hugepages:/dev/hugepages -v /var/tmp:/var/tmp -v /dev/shm:/dev/shm ${docker_volumes} ${SPDKIMAGE}
+    sudo docker exec -i "${SPDK_CONTAINER_2}" sh -c "HUGEMEM=4096 /root/spdk/scripts/setup.sh; /root/spdk/build/bin/spdk_tgt &"
+    sudo docker exec -d "${SPDK_CONTAINER_2}" sh -c "${SMA_SERVER} --address 127.0.0.1 --port ${SMA_PORT} --config /root/sma.yaml >& /var/log/$(basename ${SMA_SERVER}).log"
 
     sleep 1
     while ! nc -z "${SMA_ADDRESS}" "${SMA_PORT}"; do
